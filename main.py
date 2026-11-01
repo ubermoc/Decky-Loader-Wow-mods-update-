@@ -91,7 +91,7 @@ def _run_addon_updates(only_path: str = "") -> dict:
             decky.logger.info(
                 f"addon update {r['label']} ({r['flavor']}): tracked={r['tracked']} updated={len(r['updated'])} "
                 f"current={r['current']} no_release={r['incompatible']} no_curse_id={r['untracked']} "
-                f"failed={len(r['failed'])} error={r['error']}"
+                f"failed={len(r['failed'])} error={r['error']} no_curse_id_names={r['untracked_names']}"
             )
             for failure in r["failed"][:10]:
                 decky.logger.warning(f"addon update {r['label']}: {failure['addon']}: {failure['error']}")

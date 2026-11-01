@@ -389,6 +389,7 @@ def update_install(
         "flavor": flavor,
         "tracked": 0,
         "untracked": 0,
+        "untracked_names": [],
         "updated": [],
         "current": 0,
         "incompatible": 0,  # tracked, but CurseForge has no release for this WoW version
@@ -402,7 +403,9 @@ def update_install(
 
     found = discover(addons_dir)
     result["tracked"] = len(found.tracked)
-    result["untracked"] = len([n for n in found.untracked if not n.startswith("Blizzard_")])
+    untracked = [n for n in found.untracked if not n.startswith("Blizzard_")]
+    result["untracked"] = len(untracked)
+    result["untracked_names"] = untracked[:10]
     for addon in found.tracked:
         key = str(addon.project_id)
         label = addon.folders[0]

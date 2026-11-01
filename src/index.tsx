@@ -43,6 +43,7 @@ interface AddonRunResult {
     addons_path: string;
     tracked: number;
     untracked: number;
+    untracked_names?: string[];
     current: number;
     incompatible: number;
     updated: string[];
@@ -186,7 +187,7 @@ function summarizeRun(run: AddonRunResult): string {
       if (r.current) parts.push(`${r.current} already current`);
       if (r.incompatible) parts.push(`${r.incompatible} have no release for this version`);
       if (r.failed.length) parts.push(`${r.failed.length} failed (${r.failed[0].addon}: ${r.failed[0].error})`);
-      if (r.untracked) parts.push(`${r.untracked} have no CurseForge ID, can't be auto-updated`);
+      if (r.untracked) parts.push(`${r.untracked} have no CurseForge ID, can't be auto-updated (${(r.untracked_names ?? []).join(", ")}${r.untracked > (r.untracked_names ?? []).length ? ", ..." : ""})`);
       if (r.tracked === 0) parts.unshift("no CurseForge addons found");
       return `${r.label}: ${parts.join("; ")}`;
     })
