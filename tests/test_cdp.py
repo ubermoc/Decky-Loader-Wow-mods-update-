@@ -116,6 +116,8 @@ class FakeApp:
                 if expr == cdp.FIND_JS:
                     state = self.states.pop(0) if len(self.states) > 1 else self.states[0]
                     result = {"result": {"type": "object", "value": state}}
+                elif expr == cdp.NAVIGATE_JS:
+                    result = {"result": {"type": "string", "value": "#/game/1/my-library/my-addons"}}
                 elif expr == cdp.CLICK_JS:
                     self.clicks += 1
                     result = {"result": {"type": "boolean", "value": True}}
@@ -171,7 +173,8 @@ class DriveAppTests(unittest.TestCase):
         self.addCleanup(app.stop)
         with self.assertRaises(cdp.CdpError) as ctx:
             cdp.update_all_through_app(port=app.port, sleep=NOSLEEP, start_timeout=0.2)
-        self.assertIn("My Addons", str(ctx.exception))
+        self.assertIn("added in CurseForge", str(ctx.exception))
+        self.assertTrue(app.closed)  # closed on failure too
 
     def test_port_closed_explains_launch_option(self):
         s = socket.socket()

@@ -19,7 +19,7 @@ import tempfile  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 
-from wow_addon_tools import PROVENANCE, addons, cdp, updater  # noqa: E402
+from wow_addon_tools import PROVENANCE, addons, cdp, cfconfig, updater  # noqa: E402
 from wow_addon_tools.shortcuts import find_all_shortcuts, find_curseforge  # noqa: E402
 from wow_addon_tools.wow import find_installs  # noqa: E402
 
@@ -103,10 +103,41 @@ def _run_addon_updates(only_path: str = "") -> dict:
         _run_lock.release()
 
 
-def _drive_curseforge_app() -> dict:
-    """Blocking: press "Update all" in the already-launched CurseForge app, then close it."""
+def _restore_pending_dev_mode() -> None:
+    """Undo a dev-mode change left behind (crash, plugin reload) once CurseForge is closed."""
+    pending = _load_json("devmode_undo.json", {})
+    if not pending or cfconfig.curseforge_running():
+        return
+    try:
+        cfconfig.restore_dev_mode(cfconfig.storage_path(_home()), pending)
+        _save_json("devmode_undo.json", {})
+        decky.logger.info("restored CurseForge's dev-mode setting")
+    except Exception:
+        decky.logger.exception("could not restore CurseForge's dev-mode setting")
+
+
+def _prepare_curseforge_app() -> dict:
+    """Turn on CurseForge's dev-mode so its window is reachable over the debugging port."""
     if addons.wow_running():
         return {"ok": False, "error": "WoW is running. Close it first so addons aren't swapped under it."}
+    if cfconfig.curseforge_running():
+        return {
+            "ok": False,
+            "error": "CurseForge is already open. Close it first: it has to start fresh to allow remote control.",
+        }
+    try:
+        undo = cfconfig.enable_dev_mode(cfconfig.storage_path(_home()))
+    except cfconfig.ConfigError as exc:
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        decky.logger.exception("could not prepare CurseForge")
+        return {"ok": False, "error": f"Unexpected error: {exc}"}
+    _save_json("devmode_undo.json", undo)
+    return {"ok": True, "error": None}
+
+
+def _drive_curseforge_app() -> dict:
+    """Blocking: press "Update all" in the already-launched CurseForge app, then close it."""
     try:
         result = cdp.update_all_through_app()
     except cdp.CdpError as exc:
@@ -115,6 +146,13 @@ def _drive_curseforge_app() -> dict:
     except Exception as exc:
         decky.logger.exception("curseforge app drive crashed")
         return {"ok": False, "error": f"Unexpected error: {exc}"}
+    finally:
+        # Let the app finish closing, then put its settings file back as it was.
+        for _ in range(15):
+            if not cfconfig.curseforge_running():
+                break
+            time.sleep(1)
+        _restore_pending_dev_mode()
     decky.logger.info(f"curseforge app: {result}")
     return {"ok": True, "error": None, "clicked": result["clicked"], "message": result["message"]}
 
@@ -200,6 +238,11 @@ class Plugin:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _run_addon_updates, addons_path)
 
+    async def prepare_curseforge_app(self) -> dict:
+        """Call before launching CurseForge for update_via_curseforge_app."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _prepare_curseforge_app)
+
     async def update_via_curseforge_app(self) -> dict:
         """Call after launching CurseForge (with --remote-debugging-port=9222 in its launch options)."""
         loop = asyncio.get_running_loop()
@@ -232,6 +275,7 @@ class Plugin:
             await asyncio.sleep(delay)
 
     async def _main(self):
+        _restore_pending_dev_mode()
         self._auto_task = asyncio.create_task(self._auto_loop())
         decky.logger.info(f"WoW Addon Updater loaded ({PROVENANCE})")
 

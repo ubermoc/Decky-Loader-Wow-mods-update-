@@ -9,10 +9,12 @@ e.g. press its own "Update all" button, then close it.
 Only the standard library is used (Decky's Python has no websocket package), so this file
 contains a minimal WebSocket client. It only ever talks to 127.0.0.1.
 
-Facts about the app that this relies on (read from CurseForge 1.325.0's own files, NOT yet
-confirmed by running it): it is Electron 42, nothing disables the debugging switch, and its
-"My Addons" screen renders a button with class `update-all` whose aria-label is
-"Update all (N)" and which gets class `disabled` when there is nothing to update.
+Facts about the app (CurseForge 1.325.0, Electron 42). Confirmed by running it: the debugging port
+answers, but only exposes the window when the app's `dev-mode` setting is on (see cfconfig.py);
+my WebSocket client works against it; clicking WoW on the home screen goes to
+`#/game/1/my-library/my-addons`. Read from its code but NOT yet seen live (the test machine had no
+WoW install): the My Addons screen renders a button with class `update-all`, aria-label
+"Update all (N)", which gets class `disabled` when there is nothing to update.
 """
 
 from __future__ import annotations
@@ -45,6 +47,13 @@ CLICK_JS = """(() => {
   if (!el) return false;
   el.click();
   return true;
+})()"""
+
+
+# Clicking "World of Warcraft" on the home screen lands on this route (checked in the real app).
+NAVIGATE_JS = """(() => {
+  if (!location.hash.includes('/my-library/my-addons')) location.hash = '#/game/1/my-library/my-addons';
+  return location.hash;
 })()"""
 
 
@@ -201,6 +210,7 @@ def find_update_button(port: int) -> Optional[tuple[Cdp, dict[str, Any]]]:
             continue
         try:
             cdp = Cdp(target["webSocketDebuggerUrl"])
+            cdp.evaluate(NAVIGATE_JS)
             state = cdp.evaluate(FIND_JS)
         except (CdpError, OSError, ValueError):
             continue
@@ -214,24 +224,53 @@ def _has_count(label: str) -> bool:
     return any(ch.isdigit() and ch != "0" for ch in label)
 
 
+def close_app(port: int = DEFAULT_PORT) -> bool:
+    """Ask the app to quit through DevTools. True if the request was delivered."""
+    try:
+        version = http_json("/json/version", port)
+        browser = Cdp(version["webSocketDebuggerUrl"])
+    except Exception:
+        return False
+    try:
+        browser.call("Browser.close")
+    except (CdpError, OSError):
+        pass  # the app often drops the connection while closing
+    browser.close()
+    return True
+
+
 def update_all_through_app(
     port: int = DEFAULT_PORT,
     start_timeout: float = 90.0,
     finish_timeout: float = 20 * 60.0,
     poll: float = 3.0,
     sleep: Callable[[float], None] = time.sleep,
-    close_app: bool = True,
+    close_when_done: bool = True,
 ) -> dict[str, Any]:
-    """Press "Update all" in the running CurseForge app, wait for it to finish, close the app."""
-    wait_for_port(port, start_timeout, sleep)
+    """Press "Update all" in the running CurseForge app, wait for it to finish, close the app.
 
+    The app is closed on failure too, so it doesn't linger in the background.
+    """
+    wait_for_port(port, start_timeout, sleep)  # nothing to close if it never came up
+    try:
+        result = _press_update_all(port, start_timeout, finish_timeout, poll, sleep)
+    except BaseException:
+        if close_when_done:
+            close_app(port)
+        raise
+    if close_when_done and not close_app(port):
+        result["message"] += " (Couldn't close CurseForge by itself.)"
+    return result
+
+
+def _press_update_all(port: int, start_timeout: float, finish_timeout: float, poll: float, sleep: Callable[[float], None]) -> dict[str, Any]:
     deadline = time.monotonic() + start_timeout
     found = find_update_button(port)
     while found is None:
         if time.monotonic() >= deadline:
             raise CdpError(
-                "CurseForge opened but its \"Update all\" button wasn't on screen. Open World of Warcraft, then "
-                "My Addons, inside CurseForge once, and try again."
+                "CurseForge opened but its \"Update all\" button wasn't on screen. Make sure World of Warcraft is "
+                "added in CurseForge (Add a Game / Scan Now) and has addons, then try again."
             )
         sleep(poll)
         found = find_update_button(port)
@@ -250,7 +289,7 @@ def update_all_through_app(
             deadline = time.monotonic() + finish_timeout
             while quiet < 2:
                 if time.monotonic() >= deadline:
-                    raise CdpError("CurseForge was still updating after 20 minutes; left it open.")
+                    raise CdpError("CurseForge was still updating after 20 minutes; closed it.")
                 sleep(poll)
                 now = cdp.evaluate(FIND_JS) or {}
                 finished = (not now.get("found")) or now.get("disabled") or not _has_count(now.get("label", ""))
@@ -258,16 +297,4 @@ def update_all_through_app(
             result["message"] = f"Pressed \"{result['label']}\" and CurseForge finished."
     finally:
         cdp.close()
-
-    if close_app:
-        try:
-            version = http_json("/json/version", port)
-            browser = Cdp(version["webSocketDebuggerUrl"])
-            try:
-                browser.call("Browser.close")
-            except (CdpError, OSError):
-                pass  # the app often drops the connection while closing
-            browser.close()
-        except Exception:
-            result["message"] += " (Couldn't close CurseForge by itself.)"
     return result

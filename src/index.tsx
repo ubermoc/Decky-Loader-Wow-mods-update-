@@ -62,6 +62,7 @@ const PROVENANCE = "wow-addon-updater/2f44d0b2-b3c2-4726-a93d-480b19a8008e";
 const scan = callable<[], ScanResult>("scan");
 const updateAddons = callable<[string], AddonRunResult>("update_addons");
 const getAddonSettings = callable<[], AddonSettings>("get_addon_settings");
+const prepareApp = callable<[], { ok: boolean; error: string | null }>("prepare_curseforge_app");
 const updateViaApp = callable<[], { ok: boolean; error: string | null; clicked?: boolean; message?: string }>(
   "update_via_curseforge_app",
 );
@@ -266,8 +267,14 @@ function AddonUpdates({
           description="Opens CurseForge, presses its Update all button, then closes it. Open WoW > My Addons in CurseForge once so it reopens there."
           onClick={async () => {
             setBusy(true);
-            setMessage("Opening CurseForge...");
+            setMessage("Preparing CurseForge...");
             try {
+              const prep = await prepareApp();
+              if (!prep.ok) {
+                setMessage(prep.error ?? "Couldn't prepare CurseForge.");
+                return;
+              }
+              setMessage("Opening CurseForge...");
               launchShortcut(curseforge.app_id, withDebugFlag(curseforge.launch_options));
               setMessage("Waiting for CurseForge to start and update. This can take a few minutes.");
               const result = await updateViaApp();
