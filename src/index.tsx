@@ -61,7 +61,6 @@ interface AddonSettings {
 const PROVENANCE = "wow-addon-updater/2f44d0b2-b3c2-4726-a93d-480b19a8008e";
 
 const scan = callable<[], ScanResult>("scan");
-const updateAddons = callable<[string], AddonRunResult>("update_addons");
 const getAddonSettings = callable<[], AddonSettings>("get_addon_settings");
 const prepareApp = callable<[], { ok: boolean; error: string | null }>("prepare_curseforge_app");
 const updateViaApp = callable<[], { ok: boolean; error: string | null; clicked?: boolean; message?: string }>(
@@ -228,11 +227,9 @@ function summarizeRun(run: AddonRunResult): string {
 }
 
 function AddonUpdates({
-  installs,
   curseforge,
   onDone,
 }: {
-  installs: WowInstall[];
   curseforge: { app_id: number; launch_options: string };
   onDone: () => void;
 }) {
@@ -254,23 +251,6 @@ function AddonUpdates({
     })();
   }, []);
 
-  const run = useCallback(
-    async (path: string) => {
-      setBusy(true);
-      setMessage("Updating addons... this can take a few minutes.");
-      try {
-        const result = await updateAddons(path);
-        setMessage(summarizeRun(result));
-        onDone();
-      } catch (err) {
-        setMessage(`Addon update failed: ${String(err)}`);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [onDone],
-  );
-
   return (
     <PanelSection title="Addon updates">
       <PanelSectionRow>
@@ -288,11 +268,6 @@ function AddonUpdates({
             }
           }}
         />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <ButtonItem layout="below" disabled={busy || installs.length === 0} onClick={() => run("")}>
-          {busy ? "Working..." : "Update all addons now"}
-        </ButtonItem>
       </PanelSectionRow>
       <PanelSectionRow>
         <ButtonItem
@@ -352,14 +327,6 @@ function AddonUpdates({
           Diagnose CurseForge app
         </ButtonItem>
       </PanelSectionRow>
-      {installs.length > 1 &&
-        installs.map((install) => (
-          <PanelSectionRow key={install.addons_path}>
-            <ButtonItem layout="below" disabled={busy} onClick={() => run(install.addons_path)}>
-              Update {install.label} only
-            </ButtonItem>
-          </PanelSectionRow>
-        ))}
       {message && (
         <PanelSectionRow>
           <Field focusable label={<div style={{ whiteSpace: "pre-wrap" }}>{message}</div>} bottomSeparator="none" />
@@ -743,7 +710,7 @@ function MainContent() {
     <>
       <InstallList installs={result.installs} updated={updated} />
       <YourAddons installs={result.installs} curseforge={result.curseforge} onDone={refresh} />
-      <AddonUpdates installs={result.installs} curseforge={result.curseforge} onDone={refresh} />
+      <AddonUpdates curseforge={result.curseforge} onDone={refresh} />
       <PanelSection>
         <PanelSectionRow>
           <ButtonItem

@@ -5,7 +5,7 @@ A Gaming Mode helper for World of Warcraft addons on Steam Deck / SteamOS.
 This plugin:
 
 1. Lists every WoW version found on the system (Retail, Classic, Classic Era, PTR, ...) with the addon count and when each `AddOns` folder last changed.
-2. **Updates your addons from CurseForge by itself**, the way [wowforge-cli](https://github.com/m-triassi/wowforge-cli) does: it reads the `X-Curse-Project-ID` line in each addon's `.toc`, asks CurseForge's website API for the newest release for that WoW version, and swaps the addon folder in. Automatically shortly after Decky starts and every 6 hours (toggle in the panel), or on demand with **Update all addons now** / **Update <version> only**. It waits while WoW is running.
+2. **Updates your addons from CurseForge by itself**, the way [wowforge-cli](https://github.com/m-triassi/wowforge-cli) does: it reads the `X-Curse-Project-ID` line in each addon's `.toc`, asks CurseForge's website API for the newest release for that WoW version, and swaps the addon folder in. Automatically shortly after Decky starts and every 6 hours (toggle in the panel). It waits while WoW is running. Individual addons are updated from **Your addons**.
 3. **Your addons**: pick a WoW version from the dropdown to see its installed addons, with the installed version and what CurseForge has newest, and update or reinstall any single addon with its own button. Addons without a CurseForge ID are listed but greyed out with the reason.
 4. Can launch the CurseForge app (if you added it to Steam as a non-Steam game) and flags which versions changed during a session.
 

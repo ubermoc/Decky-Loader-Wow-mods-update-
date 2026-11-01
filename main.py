@@ -60,8 +60,8 @@ _run_lock = threading.Lock()
 _last_run: dict = {}
 
 
-def _run_addon_updates(only_path: str = "") -> dict:
-    """Blocking: update every tracked CurseForge addon (or one AddOns folder)."""
+def _run_addon_updates() -> dict:
+    """Blocking: update every tracked CurseForge addon (used by the automatic update only)."""
     if not _run_lock.acquire(blocking=False):
         return {"ok": False, "error": "An addon update is already running.", "results": []}
     try:
@@ -71,8 +71,6 @@ def _run_addon_updates(only_path: str = "") -> dict:
         client = addons.CurseForgeClient()
         results = []
         for install in find_installs(_home()):
-            if only_path and install.addons_path != only_path:
-                continue
             addons_dir = Path(install.addons_path)
             if not addons_dir.is_dir():
                 continue
@@ -370,11 +368,6 @@ class Plugin:
         )
         return {"ok": True, "error": None, "installed": installed}
 
-    async def update_addons(self, addons_path: str = "") -> dict:
-        """Update CurseForge addons now: all WoW versions, or just one AddOns folder."""
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _run_addon_updates, addons_path)
-
     async def list_addons(self, addons_path: str) -> dict:
         """Addons in one WoW version's AddOns folder (local only, fast)."""
         loop = asyncio.get_running_loop()
@@ -427,7 +420,7 @@ class Plugin:
             try:
                 if _load_json("settings.json", {}).get("auto_update", True):
                     loop = asyncio.get_running_loop()
-                    run = await loop.run_in_executor(None, _run_addon_updates, "")
+                    run = await loop.run_in_executor(None, _run_addon_updates)
                     if not run["ok"] and "WoW is running" in (run["error"] or ""):
                         delay = AUTO_RETRY_WHEN_WOW_RUNNING
             except asyncio.CancelledError:
