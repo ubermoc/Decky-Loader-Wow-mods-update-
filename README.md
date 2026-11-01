@@ -70,6 +70,10 @@ pnpm install && pnpm run build             # frontend
 
 Each run logs a line per WoW version (tracked, updated, current, failed counts and the first errors) to Decky's plugin log: `~/homebrew/logs/WoW Addon Updater/` on the Deck (newest file = current session), or `sudo journalctl -u plugin_loader.service -b`.
 
+## Authorship
+
+Copyright (c) 2026 ubermoc. Every source file carries a copyright header and the provenance marker `wow-addon-updater/2f44d0b2-b3c2-4726-a93d-480b19a8008e` (also compiled into the plugin's JavaScript and printed in its log at startup). Searching GitHub or a suspect project for that string shows whether code was copied. The dated git history in this repository is the strongest evidence of who wrote it first.
+
 ## License
 
 MIT

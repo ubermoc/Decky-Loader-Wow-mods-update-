@@ -1,6 +1,6 @@
 {
   "name": "wow-addon-updater",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "Gaming Mode helper that finds your WoW versions and opens CurseForge to update their addons",
   "type": "module",
   "scripts": {

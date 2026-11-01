@@ -1,3 +1,5 @@
+# Copyright (c) 2026 ubermoc. WoW Addon Updater, https://github.com/ubermoc/Decky-Loader-Wow-mods-update-
+# Provenance: wow-addon-updater/2f44d0b2-b3c2-4726-a93d-480b19a8008e
 """Update installed WoW addons straight from CurseForge, the way wowforge-cli does.
 
 wowforge-cli (https://github.com/m-triassi/wowforge-cli) talks to CurseForge's website API

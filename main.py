@@ -1,3 +1,5 @@
+# Copyright (c) 2026 ubermoc. WoW Addon Updater, https://github.com/ubermoc/Decky-Loader-Wow-mods-update-
+# Provenance: wow-addon-updater/2f44d0b2-b3c2-4726-a93d-480b19a8008e
 import os
 import sys
 from pathlib import Path
@@ -17,7 +19,7 @@ import tempfile  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 
-from wow_addon_tools import addons, updater  # noqa: E402
+from wow_addon_tools import PROVENANCE, addons, updater  # noqa: E402
 from wow_addon_tools.shortcuts import find_all_shortcuts, find_curseforge  # noqa: E402
 from wow_addon_tools.wow import find_installs  # noqa: E402
 
@@ -205,7 +207,7 @@ class Plugin:
 
     async def _main(self):
         self._auto_task = asyncio.create_task(self._auto_loop())
-        decky.logger.info("WoW Addon Updater loaded")
+        decky.logger.info(f"WoW Addon Updater loaded ({PROVENANCE})")
 
     async def _unload(self):
         task = getattr(self, "_auto_task", None)

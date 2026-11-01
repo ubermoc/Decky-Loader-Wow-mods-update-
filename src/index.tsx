@@ -1,3 +1,5 @@
+// Copyright (c) 2026 ubermoc. WoW Addon Updater, https://github.com/ubermoc/Decky-Loader-Wow-mods-update-
+// Provenance: wow-addon-updater/2f44d0b2-b3c2-4726-a93d-480b19a8008e
 import { callable, definePlugin } from "@decky/api";
 import { ButtonItem, Field, PanelSection, PanelSectionRow, ToggleField } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
@@ -53,6 +55,9 @@ interface AddonSettings {
   auto_update: boolean;
   last_run: AddonRunResult | null;
 }
+
+// Kept in the bundle on purpose: identifies this plugin's origin.
+const PROVENANCE = "wow-addon-updater/2f44d0b2-b3c2-4726-a93d-480b19a8008e";
 
 const scan = callable<[], ScanResult>("scan");
 const updateAddons = callable<[string], AddonRunResult>("update_addons");
@@ -463,10 +468,13 @@ function Content() {
   );
 }
 
-export default definePlugin(() => ({
+export default definePlugin(() => {
+  console.log(`[WoW Addon Updater] ${PROVENANCE}`);
+  return {
   name: "WoW Addon Updater",
   titleView: <div>WoW Addon Updater</div>,
   content: <Content />,
   icon: <FaCloudDownloadAlt />,
   onDismount() {},
-}));
+  };
+});
