@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(xvfb-run:*)",
-      "Bash(nohup xvfb-run:*)"
-    ]
-  }
-}
