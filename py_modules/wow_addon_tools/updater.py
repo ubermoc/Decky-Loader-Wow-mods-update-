@@ -8,8 +8,10 @@ BUILD (git short hash) from files that scripts/package.sh writes into the zip.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import ssl
 import tempfile
 import urllib.request
 import zipfile
@@ -26,6 +28,31 @@ REQUIRED_FILES = ("plugin.json", "main.py", "dist/index.js")
 
 _NOTES_NEW = re.compile(r"Version\s+(\S+)\s+build\s+([0-9a-f]{7,40})", re.IGNORECASE)
 _NOTES_OLD = re.compile(r"Built from\s+([0-9a-f]{7,40})", re.IGNORECASE)
+
+
+# Decky's bundled Python often can't find any CA certificates, which makes every
+# HTTPS request fail with "unable to get local issuer certificate". SteamOS is
+# Arch-based, so use its system bundle. Verification stays ON.
+_CA_BUNDLES = (
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/ca-certificates/extracted/tls-ca-bundle.pem",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/cert.pem",
+)
+
+
+def ssl_context() -> ssl.SSLContext:
+    candidates = list(_CA_BUNDLES)
+    env_bundle = os.environ.get("SSL_CERT_FILE")
+    if env_bundle:
+        candidates.append(env_bundle)
+    for path in candidates:
+        if os.path.isfile(path):
+            try:
+                return ssl.create_default_context(cafile=path)
+            except (ssl.SSLError, OSError):
+                continue
+    return ssl.create_default_context()
 
 
 class UpdateError(Exception):
@@ -75,7 +102,7 @@ def update_available(installed_build: str, latest_build: Optional[str]) -> bool:
 def fetch_latest(timeout: float = 15.0) -> dict[str, Optional[str]]:
     req = urllib.request.Request(API_URL, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=ssl_context()) as resp:
             return parse_release(json.load(resp))
     except Exception as exc:
         raise UpdateError(f"Could not check GitHub for updates: {exc}") from exc
@@ -87,7 +114,7 @@ def download(url: str, dest: Path, timeout: float = 60.0) -> None:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     total = 0
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest, "wb") as out:
+        with urllib.request.urlopen(req, timeout=timeout, context=ssl_context()) as resp, open(dest, "wb") as out:
             while True:
                 chunk = resp.read(64 * 1024)
                 if not chunk:

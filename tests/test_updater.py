@@ -65,6 +65,65 @@ class VersionCompareTests(unittest.TestCase):
         self.assertFalse(updater.update_available("abc1234", None))
 
 
+class SslContextTests(unittest.TestCase):
+    def setUp(self):
+        import ssl
+        self.ssl = ssl
+        self.real_ctx = ssl.create_default_context  # grab before patching
+
+    def test_uses_first_existing_system_bundle_and_keeps_verification_on(self):
+        wanted = "/etc/ca-certificates/extracted/tls-ca-bundle.pem"
+        seen = {}
+
+        def fake_ctx(cafile=None, **_):
+            seen["cafile"] = cafile
+            return self.real_ctx()
+
+        with mock.patch.object(updater.os.path, "isfile", side_effect=lambda p: p == wanted), \
+             mock.patch.object(updater.ssl, "create_default_context", side_effect=fake_ctx):
+            ctx = updater.ssl_context()
+        self.assertEqual(seen["cafile"], wanted)
+        self.assertEqual(ctx.verify_mode, self.ssl.CERT_REQUIRED)
+        self.assertTrue(ctx.check_hostname)
+
+    def test_falls_back_to_default_when_no_bundle_exists(self):
+        with mock.patch.object(updater.os.path, "isfile", return_value=False):
+            ctx = updater.ssl_context()
+        self.assertEqual(ctx.verify_mode, self.ssl.CERT_REQUIRED)
+
+    def test_skips_unloadable_bundle(self):
+        calls = []
+
+        def fake_ctx(cafile=None, **_):
+            calls.append(cafile)
+            if cafile == "/etc/ssl/certs/ca-certificates.crt":
+                raise self.ssl.SSLError("bad bundle")
+            return self.real_ctx()
+
+        with mock.patch.object(updater.os.path, "isfile", return_value=True), \
+             mock.patch.object(updater.ssl, "create_default_context", side_effect=fake_ctx):
+            updater.ssl_context()
+        self.assertEqual(calls[0], "/etc/ssl/certs/ca-certificates.crt")
+        self.assertEqual(calls[1], "/etc/ca-certificates/extracted/tls-ca-bundle.pem")
+
+    def test_requests_pass_the_context(self):
+        import io
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        body = b'{"body": "Version 1 build abc1234", "assets": []}'
+        with mock.patch.object(updater.urllib.request, "urlopen", return_value=Resp(body)) as uo, \
+             mock.patch.object(updater, "ssl_context", return_value="CTX"):
+            got = updater.fetch_latest()
+        self.assertEqual(uo.call_args.kwargs["context"], "CTX")
+        self.assertEqual(got["build"], "abc1234")
+
+
 class InstalledTests(unittest.TestCase):
     def test_reads_version_and_build_or_falls_back(self):
         with tempfile.TemporaryDirectory() as tmp:
