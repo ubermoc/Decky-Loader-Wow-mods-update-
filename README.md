@@ -1,1 +1,49 @@
-# Decky-Loader-Wow-mods-update-
+# WoW Addon Updater (Decky Loader plugin)
+
+A Gaming Mode helper for World of Warcraft addons on Steam Deck / SteamOS.
+
+It does **not** download or update addons itself. CurseForge's own Linux app does that. This plugin:
+
+1. Checks whether the CurseForge app has been added to Steam as a non-Steam game. If not, it shows how to add it.
+2. Once it has, lists every WoW version found on the system (Retail, Classic, Classic Era, PTR, ...) with the addon count and when each `AddOns` folder last changed.
+
+Everything is read-only: the plugin never writes to `shortcuts.vdf`, your WoW folders, or anything else.
+
+## Status
+
+| Step | State |
+|---|---|
+| Detect the CurseForge shortcut | done (untested on a real Deck) |
+| List WoW versions | done (untested on a real Deck) |
+| Launch CurseForge from the plugin | not started: needs testing on a Deck |
+| "Updated just now" detection after CurseForge closes | not started |
+| Per-version update (driving the CurseForge UI) | not started: unverified that this is possible |
+
+## Install (manual)
+
+```
+./scripts/package.sh            # needs pnpm 9+ and zip
+unzip "out/WoW Addon Updater.zip" -d ~/homebrew/plugins/
+sudo systemctl restart plugin_loader
+```
+
+## How it finds things
+
+- **CurseForge shortcut:** parses `userdata/<id>/config/shortcuts.vdf` under the native, legacy-symlink and Flatpak Steam roots, and matches "curseforge" in the shortcut name or executable path.
+- **WoW installs:** reads `libraryfolders.vdf` for every Steam library (internal drive, SD card), then looks in `steamapps/compatdata/*/pfx/drive_c/Program Files (x86)/World of Warcraft` for flavor folders such as `_retail_` and `_classic_`.
+
+## Development
+
+```
+python3 -m unittest discover -s tests -v   # backend logic
+pnpm install && pnpm run build             # frontend
+```
+
+## Unverified assumptions
+
+- `_retail_` and `_classic_` are confirmed by Steam Deck guides. The other flavor folder names (`_classic_era_`, `_ptr_`, ...) are from memory.
+- The plugin runs without the `root` flag; if the backend can't read your home directory on a real Deck, add `"root"` to `flags` in `plugin.json`.
+
+## License
+
+MIT
