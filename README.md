@@ -60,7 +60,7 @@ pnpm install && pnpm run build             # frontend
 
 - `_retail_` and `_classic_` are confirmed by Steam Deck guides. The other flavor folder names (`_classic_era_`, `_ptr_`, ...) are from memory.
 - The plugin now uses the `root` flag so it can overwrite its own files when you press **Install update**. Scanning works either way.
-- After **Install update** the plugin asks systemd (`systemd-run`) to restart `plugin_loader` two seconds later so the update loads by itself. Untested on a real Deck; if it fails the panel tells you to reload the plugin from Decky's plugin list.
+- After **Install update** the plugin runs `systemctl restart plugin_loader` three seconds later so the update loads by itself (same approach as Ubermoc Speech). If that ever fails, reload the plugin from Decky's plugin list.
 
 ## License
 

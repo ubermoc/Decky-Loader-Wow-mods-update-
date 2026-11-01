@@ -35,7 +35,6 @@ interface InstallResult {
 const scan = callable<[], ScanResult>("scan");
 const getUpdateInfo = callable<[], UpdateInfo>("get_update_info");
 const installUpdate = callable<[], InstallResult>("install_update");
-const restartLoader = callable<[], { ok: boolean; error: string | null }>("restart_loader");
 
 function describeBuild(version: string | null | undefined, build: string | null | undefined): string {
   if (!build) return version ?? "unknown";
@@ -146,18 +145,7 @@ function UpdatesSection() {
       const result = await installUpdate();
       if (result.ok) {
         setInstalledNow(true);
-        try {
-          const restart = await restartLoader();
-          setMessage(
-            restart.ok
-              ? "Update installed. Decky is restarting in a moment to load it."
-              : `Update installed, but the automatic restart failed (${restart.error}). Reload the plugin from Decky's plugin list.`,
-          );
-        } catch (err) {
-          setMessage(
-            `Update installed, but the automatic restart failed (${String(err)}). Reload the plugin from Decky's plugin list.`,
-          );
-        }
+        setMessage("Updated. Decky is restarting - reopen this menu in a few seconds.");
       } else {
         setMessage(result.error ?? "Update failed.");
       }

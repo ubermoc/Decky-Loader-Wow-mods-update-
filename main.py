@@ -87,26 +87,15 @@ class Plugin:
             decky.logger.exception("update crashed")
             return {"ok": False, "error": f"Unexpected error: {exc}", "installed": None}
         decky.logger.info(f"installed update {installed}")
+        # Restart Decky shortly so the new backend and frontend are loaded
+        # (same approach as the Ubermoc Speech plugin).
+        subprocess.Popen(
+            ["sh", "-c", "sleep 3; systemctl restart plugin_loader"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
         return {"ok": True, "error": None, "installed": installed}
-
-    async def restart_loader(self) -> dict:
-        """Restart Decky's plugin loader so a freshly installed update takes effect.
-
-        The restart kills this backend, so it is scheduled as a transient systemd
-        timer (outside this service's cgroup) a couple of seconds from now, which
-        lets this call return first.
-        """
-        try:
-            subprocess.Popen(
-                ["systemd-run", "--on-active=2", "--collect", "systemctl", "restart", "plugin_loader"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception as exc:
-            decky.logger.exception("could not schedule loader restart")
-            return {"ok": False, "error": str(exc)}
-        decky.logger.info("scheduled plugin_loader restart")
-        return {"ok": True, "error": None}
 
     async def _main(self):
         decky.logger.info("WoW Addon Updater loaded")
