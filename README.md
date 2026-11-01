@@ -76,4 +76,4 @@ Copyright (c) 2026 ubermoc. Every source file carries a copyright header and the
 
 ## License
 
-MIT
+Proprietary, all rights reserved. See [LICENSE](LICENSE). You may install and run the official release for personal use; copying, modifying, redistributing or using the code to train or prompt AI systems is not permitted without written permission.
