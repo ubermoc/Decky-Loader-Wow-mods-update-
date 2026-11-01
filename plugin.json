@@ -1,7 +1,7 @@
 {
   "name": "WoW Addon Updater",
   "author": "ubermoc",
-  "flags": [],
+  "flags": ["root"],
   "api_version": 1,
   "publish": {
     "tags": ["utility", "wow", "addons"],

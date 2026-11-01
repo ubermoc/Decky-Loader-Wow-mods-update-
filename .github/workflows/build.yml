@@ -33,9 +33,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          BUILD=$(cat "out/WoW Addon Updater/BUILD")
+          VERSION=$(cat VERSION)
           gh release delete latest --yes --cleanup-tag || true
           gh release create latest "out/WoW Addon Updater.zip" \
             --prerelease \
             --title "Latest build" \
-            --notes "Built from ${GITHUB_SHA::7}" \
+            --notes "Version ${VERSION} build ${BUILD}" \
             --target "$GITHUB_SHA"

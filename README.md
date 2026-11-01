@@ -15,6 +15,7 @@ Everything is read-only: the plugin never writes to `shortcuts.vdf`, your WoW fo
 |---|---|
 | Detect the CurseForge shortcut | done (untested on a real Deck) |
 | List WoW versions | done (untested on a real Deck) |
+| Updates section (installed vs latest, Install update button) | done; the first install of it must be done with the curl commands below |
 | Launch CurseForge from the plugin | not started: needs testing on a Deck |
 | "Updated just now" detection after CurseForge closes | not started |
 | Per-version update (driving the CurseForge UI) | not started: unverified that this is possible |
@@ -32,6 +33,10 @@ sudo rm -rf "$HOME/homebrew/plugins/WoW Addon Updater"
 sudo unzip -o wow-addon-updater.zip -d "$HOME/homebrew/plugins/"
 sudo systemctl restart plugin_loader
 ```
+
+## Updating from inside the plugin
+
+The **Updates** section at the bottom of the panel shows the installed version, the latest version, and an **Install update** button. It downloads the latest release zip from this repository only, checks that the archive is safe and complete, swaps the files in, and rolls back if anything fails.
 
 ## Building it yourself (needs pnpm 9+ and zip)
 
@@ -54,7 +59,8 @@ pnpm install && pnpm run build             # frontend
 ## Unverified assumptions
 
 - `_retail_` and `_classic_` are confirmed by Steam Deck guides. The other flavor folder names (`_classic_era_`, `_ptr_`, ...) are from memory.
-- The plugin runs without the `root` flag; if the backend can't read your home directory on a real Deck, add `"root"` to `flags` in `plugin.json`.
+- The plugin now uses the `root` flag so it can overwrite its own files when you press **Install update**. Scanning works either way.
+- After **Install update**, Decky has to reload the plugin: open Decky's plugin list (gear icon) and choose Reload. I haven't confirmed there is a way to trigger that automatically.
 
 ## License
 

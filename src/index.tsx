@@ -19,7 +19,28 @@ interface ScanResult {
   installs: WowInstall[];
 }
 
+interface UpdateInfo {
+  installed: { version: string; build: string };
+  latest: { version: string | null; build: string | null } | null;
+  update_available: boolean;
+  error: string | null;
+}
+
+interface InstallResult {
+  ok: boolean;
+  error: string | null;
+  installed: { version: string | null; build: string | null } | null;
+}
+
 const scan = callable<[], ScanResult>("scan");
+const getUpdateInfo = callable<[], UpdateInfo>("get_update_info");
+const installUpdate = callable<[], InstallResult>("install_update");
+
+function describeBuild(version: string | null | undefined, build: string | null | undefined): string {
+  if (!build) return version ?? "unknown";
+  const short = build.slice(0, 7);
+  return version && version !== "unknown" ? `${version} (${short})` : short;
+}
 
 function formatModified(epochSeconds: number | null): string {
   if (epochSeconds === null) return "never";
@@ -82,7 +103,92 @@ function InstallList({ installs }: { installs: WowInstall[] }) {
   );
 }
 
-function Content() {
+function UpdatesSection() {
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [installedNow, setInstalledNow] = useState(false);
+
+  const check = useCallback(async () => {
+    setBusy(true);
+    try {
+      setInfo(await getUpdateInfo());
+    } catch (err) {
+      setMessage(`Update check failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void check();
+  }, [check]);
+
+  const install = useCallback(async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await installUpdate();
+      if (result.ok) {
+        setInstalledNow(true);
+        setMessage(
+          "Update installed. Open Decky's plugin list (gear icon) and choose Reload for WoW Addon Updater to start using it.",
+        );
+      } else {
+        setMessage(result.error ?? "Update failed.");
+      }
+    } catch (err) {
+      setMessage(`Update failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const installed = info ? describeBuild(info.installed.version, info.installed.build) : "...";
+  const latest = info?.latest ? describeBuild(info.latest.version, info.latest.build) : info ? "unavailable" : "...";
+  const canInstall = !!info?.update_available && !busy && !installedNow;
+  const status = installedNow
+    ? "Installed - reload the plugin"
+    : info?.error
+      ? info.error
+      : info?.update_available
+        ? "Update available"
+        : info
+          ? "Up to date"
+          : "Checking...";
+
+  return (
+    <PanelSection title="Updates">
+      <PanelSectionRow>
+        <Field focusable label="Installed version" bottomSeparator="none">
+          {installed}
+        </Field>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <Field focusable label="Latest version" description={status} bottomSeparator="none">
+          {latest}
+        </Field>
+      </PanelSectionRow>
+      {message && (
+        <PanelSectionRow>
+          <Field focusable label={message} bottomSeparator="none" />
+        </PanelSectionRow>
+      )}
+      <PanelSectionRow>
+        <ButtonItem layout="below" disabled={!canInstall} onClick={install}>
+          {busy ? "Working..." : "Install update"}
+        </ButtonItem>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ButtonItem layout="below" disabled={busy} onClick={check}>
+          Check for updates
+        </ButtonItem>
+      </PanelSectionRow>
+    </PanelSection>
+  );
+}
+
+function MainContent() {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -141,6 +247,15 @@ function Content() {
           </ButtonItem>
         </PanelSectionRow>
       </PanelSection>
+    </>
+  );
+}
+
+function Content() {
+  return (
+    <>
+      <MainContent />
+      <UpdatesSection />
     </>
   );
 }
