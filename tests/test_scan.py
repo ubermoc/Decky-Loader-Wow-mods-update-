@@ -34,6 +34,14 @@ class ShortcutTests(unittest.TestCase):
         self.assertEqual([s.name for s in found], ["CurseForge", "Other"])
         self.assertEqual(found[0].app_id, 3000000001)  # unsigned
 
+    def test_reads_launch_options(self):
+        entry = (
+            b"\x00shortcuts\x00\x000\x00" + _i("appid", 7) + _s("AppName", "CurseForge") + _s("Exe", "e")
+            + _s("LaunchOptions", "--no-sandbox") + b"\x08\x08\x08"
+        )
+        self.assertEqual(list(shortcuts.iter_shortcuts(entry))[0].launch_options, "--no-sandbox")
+        self.assertEqual(list(shortcuts.iter_shortcuts(build_vdf([(1, "A", "e")])))[0].launch_options, "")
+
     def test_finds_curseforge_by_name_or_exe(self):
         by_name = shortcuts.Shortcut(1, "CurseForge", "/x")
         by_exe = shortcuts.Shortcut(2, "WoW Addons", "/home/deck/curseforge-1.0.AppImage")

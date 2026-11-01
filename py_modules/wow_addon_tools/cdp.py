@@ -187,8 +187,9 @@ def wait_for_port(port: int, timeout: float, sleep: Callable[[float], None] = ti
         except Exception:
             if time.monotonic() >= deadline:
                 raise CdpError(
-                    "Couldn't reach CurseForge's debugging port. In Steam, add --remote-debugging-port=9222 "
-                    "to the CurseForge shortcut's launch options, then try again."
+                    "Couldn't reach CurseForge's debugging port. The plugin passes --remote-debugging-port=9222 "
+                    "when it launches CurseForge; if Steam ignored that, add it to the CurseForge shortcut's "
+                    "launch options yourself (keep any existing options), then try again."
                 ) from None
             sleep(1.0)
 

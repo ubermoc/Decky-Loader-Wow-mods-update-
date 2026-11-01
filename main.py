@@ -134,7 +134,12 @@ class Plugin:
             "ok": True,
             "error": None,
             "curseforge": (
-                {"app_id": curseforge.app_id, "name": curseforge.name, "exe": curseforge.exe}
+                {
+                    "app_id": curseforge.app_id,
+                    "name": curseforge.name,
+                    "exe": curseforge.exe,
+                    "launch_options": curseforge.launch_options,
+                }
                 if curseforge
                 else None
             ),

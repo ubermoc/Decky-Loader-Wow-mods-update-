@@ -17,7 +17,7 @@ interface WowInstall {
 interface ScanResult {
   ok: boolean;
   error: string | null;
-  curseforge: { app_id: number; name: string; exe: string } | null;
+  curseforge: { app_id: number; name: string; exe: string; launch_options: string } | null;
   installs: WowInstall[];
 }
 
@@ -81,12 +81,20 @@ function shortcutGameId(appId: number): string {
   return ((BigInt(appId >>> 0) << 32n) | 0x02000000n).toString();
 }
 
-function launchShortcut(appId: number): void {
+const DEBUG_FLAG = "--remote-debugging-port=9222";
+
+// The shortcut's own launch options plus the debugging flag, for ONE launch only (nothing in Steam
+// is edited). Existing options are kept in case Steam replaces rather than appends them.
+function withDebugFlag(existing: string): string {
+  return existing.includes("--remote-debugging-port") ? existing : `${existing} ${DEBUG_FLAG}`.trim();
+}
+
+function launchShortcut(appId: number, launchOptions = ""): void {
   // Typed loosely on purpose: this API is undocumented and unverified on a real Deck.
   const steam = (window as unknown as { SteamClient?: { Apps?: { RunGame?: (...a: unknown[]) => void } } })
     .SteamClient;
   if (!steam?.Apps?.RunGame) throw new Error("SteamClient.Apps.RunGame is not available");
-  steam.Apps.RunGame(shortcutGameId(appId), "", -1, 100);
+  steam.Apps.RunGame(shortcutGameId(appId), launchOptions, -1, 100);
 }
 
 // addons_modified per AddOns folder at the moment CurseForge was launched. Module-level so it
@@ -186,11 +194,11 @@ function summarizeRun(run: AddonRunResult): string {
 
 function AddonUpdates({
   installs,
-  curseforgeAppId,
+  curseforge,
   onDone,
 }: {
   installs: WowInstall[];
-  curseforgeAppId: number;
+  curseforge: { app_id: number; launch_options: string };
   onDone: () => void;
 }) {
   const [settings, setSettings] = useState<AddonSettings | null>(null);
@@ -255,12 +263,12 @@ function AddonUpdates({
         <ButtonItem
           layout="below"
           disabled={busy}
-          description="Opens CurseForge, presses its Update all button, then closes it. Needs --remote-debugging-port=9222 added to the CurseForge shortcut's launch options in Steam, and WoW > My Addons open in CurseForge."
+          description="Opens CurseForge, presses its Update all button, then closes it. Open WoW > My Addons in CurseForge once so it reopens there."
           onClick={async () => {
             setBusy(true);
             setMessage("Opening CurseForge...");
             try {
-              launchShortcut(curseforgeAppId);
+              launchShortcut(curseforge.app_id, withDebugFlag(curseforge.launch_options));
               setMessage("Waiting for CurseForge to start and update. This can take a few minutes.");
               const result = await updateViaApp();
               setMessage(result.ok ? (result.message ?? "Done.") : (result.error ?? "Failed."));
@@ -460,7 +468,7 @@ function MainContent() {
   return (
     <>
       <InstallList installs={result.installs} updated={updated} />
-      <AddonUpdates installs={result.installs} curseforgeAppId={result.curseforge.app_id} onDone={refresh} />
+      <AddonUpdates installs={result.installs} curseforge={result.curseforge} onDone={refresh} />
       <PanelSection>
         <PanelSectionRow>
           <ButtonItem

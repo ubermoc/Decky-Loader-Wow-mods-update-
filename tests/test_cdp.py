@@ -181,6 +181,7 @@ class DriveAppTests(unittest.TestCase):
         with self.assertRaises(cdp.CdpError) as ctx:
             cdp.update_all_through_app(port=port, sleep=NOSLEEP, start_timeout=0.2)
         self.assertIn("--remote-debugging-port=9222", str(ctx.exception))
+        self.assertIn("launch options", str(ctx.exception))
 
 
 if __name__ == "__main__":

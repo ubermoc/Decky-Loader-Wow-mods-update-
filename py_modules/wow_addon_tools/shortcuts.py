@@ -32,6 +32,7 @@ class Shortcut:
     app_id: int  # unsigned 32-bit id as stored by Steam
     name: str
     exe: str
+    launch_options: str = ""
 
 
 def _read_cstr(data: bytes, pos: int) -> tuple[str, int]:
@@ -93,6 +94,7 @@ def iter_shortcuts(data: bytes) -> Iterator[Shortcut]:
             app_id=int(_ci_get(entry, "appid", 0) or 0),
             name=str(_ci_get(entry, "AppName", "") or ""),
             exe=str(_ci_get(entry, "Exe", "") or ""),
+            launch_options=str(_ci_get(entry, "LaunchOptions", "") or ""),
         )
 
 

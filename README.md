@@ -70,7 +70,7 @@ pnpm install && pnpm run build             # frontend
 
 The **Update through the CurseForge app** button launches CurseForge, presses its own **Update all** button, waits for it to finish and closes it. It works by talking to the app over Chromium's remote debugging port (CurseForge is an Electron app), so it needs:
 
-1. `--remote-debugging-port=9222` added to the CurseForge shortcut's launch options in Steam (keep any existing options such as `--no-sandbox`). This opens a local-only port while CurseForge runs.
+1. Nothing to set up in Steam: the plugin passes `--remote-debugging-port=9222` for that one launch only (via Steam's `RunGame` launch-options argument), together with the shortcut's existing launch options read from `shortcuts.vdf`. The port is local-only and open only while CurseForge runs. If Steam ignores it, the error message says to add the flag to the shortcut's launch options by hand.
 2. WoW > My Addons open in CurseForge (it should reopen on the last screen).
 
 Based on reading CurseForge 1.325.0's files: it is Electron 42, nothing disables the debugging switch, and the My Addons screen has a button with class `update-all` labelled "Update all (N)". **Not yet run against the real app**, so treat it as untested; Overwolf can change the interface at any time. The direct updater above does not need any of this.
