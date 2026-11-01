@@ -44,26 +44,26 @@ STATUS_APPROVED = 4
 # CurseForge "game version type" ids for World of Warcraft (from wowforge-cli).
 TYPE_RETAIL = 517
 TYPE_CLASSIC_ERA = 67408
-TYPE_TBC = 73246
-TYPE_CATA = 77522
-TYPE_MOP = 79434
 
+# Folders that are always Retail / Classic Era. Retail is matched by type id (CurseForge tags
+# retail files broadly). Everything else is matched by the client version, see FlavorTarget.
 _FIXED_FLAVORS = {
     "_retail_": TYPE_RETAIL,
     "_ptr_": TYPE_RETAIL,
     "_xptr_": TYPE_RETAIL,
     "_beta_": TYPE_RETAIL,
-    "_classic_era_": TYPE_CLASSIC_ERA,
-    "_classic_era_ptr_": TYPE_CLASSIC_ERA,
 }
-# Folders whose expansion changes over time: read it from the WoW root's .build.info.
+# Folders whose product is described in the WoW root's .build.info.
 _PRODUCT_FOR_FLAVOR = {
     "_classic_": "wow_classic",
     "_classic_ptr_": "wow_classic_ptr",
     "_classic_beta_": "wow_classic_beta",
+    "_classic_era_": "wow_classic_era",
+    "_classic_era_ptr_": "wow_classic_era_ptr",
 }
 
 _PROJECT_ID = re.compile(r"^\s*##\s*X-Curse-Project-ID\s*:\s*(\d+)", re.IGNORECASE | re.MULTILINE)
+_TOC_VERSION = re.compile(r"^\s*##\s*Version\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 _WOW_PROCESS = re.compile(r"(^|[\\/ ])wow[a-z]*\.exe", re.IGNORECASE)
 
 
@@ -91,29 +91,44 @@ def parse_build_info(text: str) -> dict[str, str]:
     return out
 
 
-def type_for_version(version: str) -> Optional[int]:
-    """CurseForge type id for a client version like '5.5.3.65299' (None if unsupported)."""
-    try:
-        major = int(version.split(".")[0])
-    except (ValueError, IndexError):
-        return None
-    if major >= 10:
-        return TYPE_RETAIL
-    return {1: TYPE_CLASSIC_ERA, 2: TYPE_TBC, 4: TYPE_CATA, 5: TYPE_MOP}.get(major)
+@dataclass(frozen=True)
+class FlavorTarget:
+    """What a compatible CurseForge file looks like for one WoW folder.
+
+    version_prefix: "major.minor" of the installed client (e.g. "5.5"). CurseForge lists the
+        client versions a file supports in `gameVersions` (e.g. "5.5.4"), which is far more
+        reliable for the Classic flavors than the shared type ids. Used when known.
+    type_id: fallback match on `gameVersionTypeIds` (Retail, or no .build.info).
+    """
+
+    type_id: Optional[int] = None
+    version_prefix: Optional[str] = None
+
+    def matches(self, file: dict[str, Any]) -> bool:
+        if self.version_prefix:
+            prefix = self.version_prefix + "."
+            return any(str(v).startswith(prefix) or str(v) == self.version_prefix for v in file.get("gameVersions") or [])
+        return self.type_id is not None and self.type_id in (file.get("gameVersionTypeIds") or [])
 
 
-def type_id_for(flavor: str, wow_root: Path) -> Optional[int]:
+def target_for(flavor: str, wow_root: Path) -> Optional[FlavorTarget]:
     if flavor in _FIXED_FLAVORS:
-        return _FIXED_FLAVORS[flavor]
+        return FlavorTarget(type_id=_FIXED_FLAVORS[flavor])
     product = _PRODUCT_FOR_FLAVOR.get(flavor)
     if not product:
         return None
     try:
-        info = parse_build_info((wow_root / ".build.info").read_text(errors="replace"))
+        version = parse_build_info((wow_root / ".build.info").read_text(errors="replace")).get(product)
     except OSError:
-        return None
-    version = info.get(product)
-    return type_for_version(version) if version else None
+        version = None
+    parts = (version or "").split(".")
+    if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+        if int(parts[0]) >= 10:  # modern retail-line client
+            return FlavorTarget(type_id=TYPE_RETAIL)
+        return FlavorTarget(version_prefix=f"{int(parts[0])}.{int(parts[1])}")
+    if flavor.startswith("_classic_era"):
+        return FlavorTarget(type_id=TYPE_CLASSIC_ERA)
+    return None
 
 
 # ---------------------------------------------------------------- discovery
@@ -122,36 +137,46 @@ def type_id_for(flavor: str, wow_root: Path) -> Optional[int]:
 class TrackedAddon:
     project_id: int
     folders: list[str]
-    newest_mtime: float  # newest folder/.toc change across its folders
+    versions: list[str]  # `## Version:` values from the installed .toc files
 
 
-def discover(addons_dir: Path) -> list[TrackedAddon]:
+@dataclass
+class Discovery:
+    tracked: list[TrackedAddon]
+    untracked: list[str]  # folders without a CurseForge id (hand-installed, Blizzard_*, ...)
+
+
+def discover(addons_dir: Path) -> Discovery:
     """Group the AddOns folders by their CurseForge project id."""
     grouped: dict[int, TrackedAddon] = {}
+    untracked: list[str] = []
     try:
         entries = sorted(p for p in addons_dir.iterdir() if p.is_dir() and not p.name.startswith("."))
     except OSError:
-        return []
+        return Discovery([], [])
     for entry in entries:
         project_id: Optional[int] = None
-        newest = 0.0
+        versions: list[str] = []
         try:
-            newest = entry.stat().st_mtime
             for toc in sorted(entry.glob("*.toc")):
-                newest = max(newest, toc.stat().st_mtime)
+                with open(toc, "rb") as fh:
+                    text = fh.read(65536).decode("utf-8", "replace")
                 if project_id is None:
-                    with open(toc, "rb") as fh:
-                        match = _PROJECT_ID.search(fh.read(65536).decode("utf-8", "replace"))
+                    match = _PROJECT_ID.search(text)
                     if match:
                         project_id = int(match.group(1))
+                version = _TOC_VERSION.search(text)
+                if version:
+                    versions.append(version.group(1))
         except OSError:
             continue
         if project_id is None:
+            untracked.append(entry.name)
             continue
-        addon = grouped.setdefault(project_id, TrackedAddon(project_id, [], 0.0))
+        addon = grouped.setdefault(project_id, TrackedAddon(project_id, [], []))
         addon.folders.append(entry.name)
-        addon.newest_mtime = max(addon.newest_mtime, newest)
-    return list(grouped.values())
+        addon.versions.extend(versions)
+    return Discovery(list(grouped.values()), untracked)
 
 
 # ---------------------------------------------------------------- choosing a file
@@ -163,7 +188,7 @@ def _created(file: dict[str, Any]) -> float:
         return 0.0
 
 
-def pick_file(files: list[dict[str, Any]], type_id: int) -> Optional[dict[str, Any]]:
+def pick_file(files: list[dict[str, Any]], target: FlavorTarget) -> Optional[dict[str, Any]]:
     """Newest approved *release* file built for this game flavor."""
     best: Optional[dict[str, Any]] = None
     for f in files:
@@ -171,19 +196,28 @@ def pick_file(files: list[dict[str, Any]], type_id: int) -> Optional[dict[str, A
             continue
         if f.get("status", STATUS_APPROVED) != STATUS_APPROVED:
             continue
-        if type_id not in (f.get("gameVersionTypeIds") or []):
+        if not target.matches(f):
             continue
         if best is None or _created(f) > _created(best):
             best = f
     return best
 
 
+def _version_token(version: str) -> str:
+    return version.strip().lstrip("#vV").strip()
+
+
 def needs_update(addon: TrackedAddon, file: dict[str, Any], installed_file_id: Optional[int]) -> bool:
-    """Known file id wins. Otherwise assume it is current if it was released before the
-    folders were last written (i.e. it was already the newest when it was installed)."""
+    """A recorded file id wins. Otherwise call it current only if its `## Version:` shows up in
+    the release's name (e.g. 'Details.20261015.15339.172'); in doubt, download."""
     if installed_file_id is not None:
         return installed_file_id != file["id"]
-    return _created(file) > addon.newest_mtime
+    names = f"{file.get('fileName', '')} {file.get('displayName', '')}".lower()
+    for version in addon.versions:
+        token = _version_token(version).lower()
+        if len(token) >= 4 and "@" not in token and token in names:
+            return False
+    return True
 
 
 # ---------------------------------------------------------------- network
@@ -233,11 +267,11 @@ class CurseForgeClient:
             raise AddonError(f"Download failed for project {project_id}: {exc}") from exc
 
 
-def newest_file(client: Any, project_id: int, type_id: int) -> Optional[dict[str, Any]]:
+def newest_file(client: Any, project_id: int, target: FlavorTarget) -> Optional[dict[str, Any]]:
     """Walk the (newest-first) file pages until one holds a matching release."""
     for page in range(MAX_PAGES):
         files = client.files_page(project_id, page)
-        found = pick_file(files, type_id)
+        found = pick_file(files, target)
         if found:
             return found
         if len(files) < PAGE_SIZE:
@@ -350,25 +384,32 @@ def update_install(
     result: dict[str, Any] = {
         "flavor": flavor,
         "tracked": 0,
+        "untracked": 0,
         "updated": [],
+        "current": 0,
+        "incompatible": 0,  # tracked, but CurseForge has no release for this WoW version
         "failed": [],
         "error": None,
     }
-    type_id = type_id_for(flavor, wow_root)
-    if type_id is None:
-        result["error"] = f"Can't tell which WoW version {flavor} is, so it was skipped."
+    target = target_for(flavor, wow_root)
+    if target is None:
+        result["error"] = f"Can't tell which WoW version {flavor} is (no .build.info), so it was skipped."
         return result
 
-    addons = discover(addons_dir)
-    result["tracked"] = len(addons)
-    for addon in addons:
+    found = discover(addons_dir)
+    result["tracked"] = len(found.tracked)
+    result["untracked"] = len([n for n in found.untracked if not n.startswith("Blizzard_")])
+    for addon in found.tracked:
         key = str(addon.project_id)
         label = addon.folders[0]
         try:
-            file = newest_file(client, addon.project_id, type_id)
-            if file is None or not needs_update(addon, file, state.get(key)):
-                if file is not None:
-                    state.setdefault(key, file["id"])
+            file = newest_file(client, addon.project_id, target)
+            if file is None:
+                result["incompatible"] += 1
+                continue
+            if not needs_update(addon, file, state.get(key)):
+                state[key] = file["id"]
+                result["current"] += 1
                 continue
             with tempfile.TemporaryDirectory() as tmp:
                 zip_path = Path(tmp) / "addon.zip"

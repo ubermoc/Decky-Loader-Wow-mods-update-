@@ -61,8 +61,8 @@ pnpm install && pnpm run build             # frontend
 
 - `_retail_` and `_classic_` are confirmed by Steam Deck guides. The other flavor folder names (`_classic_era_`, `_ptr_`, ...) are from memory.
 - The CurseForge website API (`/api/v1/mods/<id>/files`, no key) is undocumented. It worked when tested; it may break or be rate limited.
-- `_classic_` is mapped to an expansion by reading `.build.info` in the WoW folder. Wrath of the Lich King has no known CurseForge type id, so it is skipped with a message.
-- Without a record of what it installed, the plugin assumes an addon is current if its newest CurseForge release is older than the folder's last change.
+- Classic folders are matched on the client version from `.build.info` in the WoW folder (e.g. `5.5` against each file's `gameVersions`), because CurseForge's type ids are shared between several Classic versions. This covers Wrath, Cata, MoP and "forever" clients. Retail uses CurseForge's Retail type id.
+- Without a record of what it installed, an addon counts as current only if its `## Version:` appears in the newest release's name; otherwise it is downloaded once and recorded.
 - The plugin now uses the `root` flag so it can overwrite its own files when you press **Install update**. Scanning works either way.
 - After **Install update** the plugin runs `systemctl restart plugin_loader` three seconds later so the update loads by itself (same approach as Ubermoc Speech). If that ever fails, reload the plugin from Decky's plugin list.
 

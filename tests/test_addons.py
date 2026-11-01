@@ -17,12 +17,14 @@ BUILD_INFO = (
 )
 
 
-def make_addon(addons_dir: Path, folder: str, project_id=None, mtime=None) -> None:
+def make_addon(addons_dir: Path, folder: str, project_id=None, mtime=None, version=None) -> None:
     d = addons_dir / folder
     d.mkdir(parents=True, exist_ok=True)
     lines = ["## Interface: 110200", f"## Title: {folder}"]
     if project_id is not None:
         lines.append(f"## X-Curse-Project-ID: {project_id}")
+    if version is not None:
+        lines.append(f"## Version: {version}")
     (d / f"{folder}.toc").write_text("\n".join(lines))
     if mtime is not None:
         for p in (d / f"{folder}.toc", d, addons_dir):
@@ -64,30 +66,48 @@ class FlavorTests(unittest.TestCase):
         info = addons.parse_build_info(BUILD_INFO)
         self.assertEqual(info["wow_classic"], "5.5.0.62655")
 
-    def test_versions_map_to_types(self):
-        self.assertEqual(addons.type_for_version("11.2.0.1"), addons.TYPE_RETAIL)
-        self.assertEqual(addons.type_for_version("5.5.0.1"), addons.TYPE_MOP)
-        self.assertEqual(addons.type_for_version("4.4.1.1"), addons.TYPE_CATA)
-        self.assertEqual(addons.type_for_version("1.15.7.1"), addons.TYPE_CLASSIC_ERA)
-        self.assertIsNone(addons.type_for_version("3.4.3.1"))  # no known type id
-        self.assertIsNone(addons.type_for_version("garbage"))
+    def root_with(self, tmp, text=BUILD_INFO):
+        root = Path(tmp)
+        (root / ".build.info").write_text(text)
+        return root
 
-    def test_type_id_for_flavors(self):
+    def test_targets_by_flavor(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / ".build.info").write_text(BUILD_INFO)
-            self.assertEqual(addons.type_id_for("_retail_", root), addons.TYPE_RETAIL)
-            self.assertEqual(addons.type_id_for("_classic_era_", root), addons.TYPE_CLASSIC_ERA)
-            self.assertEqual(addons.type_id_for("_classic_", root), addons.TYPE_MOP)
-            self.assertIsNone(addons.type_id_for("_something_new_", root))
+            root = self.root_with(tmp)
+            self.assertEqual(addons.target_for("_retail_", root), addons.FlavorTarget(type_id=517))
+            self.assertEqual(addons.target_for("_classic_", root), addons.FlavorTarget(version_prefix="5.5"))
+            self.assertEqual(addons.target_for("_classic_era_", root), addons.FlavorTarget(version_prefix="1.15"))
+            self.assertIsNone(addons.target_for("_something_new_", root))
 
-    def test_classic_without_build_info_is_unknown(self):
+    def test_wrath_and_forever_clients_are_supported(self):
+        for version, prefix in (("3.4.3.54261", "3.4"), ("4.4.1.1", "4.4"), ("1.60.1.99", "1.60")):
+            info = f"Version!STRING:0|Product!STRING:0\n{version}|wow_classic\n"
+            with tempfile.TemporaryDirectory() as tmp:
+                root = self.root_with(tmp, info)
+                self.assertEqual(addons.target_for("_classic_", root), addons.FlavorTarget(version_prefix=prefix))
+
+    def test_modern_version_in_classic_folder_means_retail_type(self):
+        info = "Version!STRING:0|Product!STRING:0\n12.0.1.1|wow_classic\n"
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertIsNone(addons.type_id_for("_classic_", Path(tmp)))
+            self.assertEqual(addons.target_for("_classic_", self.root_with(tmp, info)), addons.FlavorTarget(type_id=517))
+
+    def test_era_falls_back_to_type_id_without_build_info(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(addons.target_for("_classic_era_", Path(tmp)), addons.FlavorTarget(type_id=67408))
+            self.assertIsNone(addons.target_for("_classic_", Path(tmp)))
+
+    def test_matches_by_client_version_not_shared_type_ids(self):
+        wrath = addons.FlavorTarget(version_prefix="3.4")
+        forever = addons.FlavorTarget(version_prefix="1.60")
+        f = {"gameVersions": ["1.15.9", "3.4.5", "4.4.2", "5.5.4", "1.60.1"], "gameVersionTypeIds": [81212, 88568]}
+        self.assertTrue(wrath.matches(f))
+        self.assertTrue(forever.matches(f))
+        self.assertFalse(addons.FlavorTarget(version_prefix="3.5").matches(f))
+        self.assertFalse(addons.FlavorTarget(version_prefix="1.6").matches(f))  # no prefix bleed (1.6 vs 1.60)
 
 
 class DiscoverTests(unittest.TestCase):
-    def test_groups_folders_by_project_and_skips_untracked(self):
+    def test_groups_folders_by_project_and_reports_untracked(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             make_addon(d, "Details", 61284)
@@ -95,9 +115,11 @@ class DiscoverTests(unittest.TestCase):
             make_addon(d, "DBM-Core", 3358)
             make_addon(d, "HandWritten")  # no project id
             (d / ".wowupdater-old").mkdir()
-            found = {a.project_id: a for a in addons.discover(d)}
-            self.assertEqual(set(found), {61284, 3358})
-            self.assertEqual(sorted(found[61284].folders), ["Details", "Details_Streamer"])
+            found = addons.discover(d)
+            tracked = {a.project_id: a for a in found.tracked}
+            self.assertEqual(set(tracked), {61284, 3358})
+            self.assertEqual(sorted(tracked[61284].folders), ["Details", "Details_Streamer"])
+            self.assertEqual(found.untracked, ["HandWritten"])
 
 
 class PickFileTests(unittest.TestCase):
@@ -109,18 +131,21 @@ class PickFileTests(unittest.TestCase):
             cf_file(4, "2026-06-01T00:00:00Z", types=(67408,)),  # other flavor
             cf_file(5, "2026-07-01T00:00:00Z", status=10),  # not approved
         ]
-        self.assertEqual(addons.pick_file(files, 517)["id"], 2)
-        self.assertEqual(addons.pick_file(files, 67408)["id"], 4)
-        self.assertIsNone(addons.pick_file(files, 79434))
+        retail = addons.FlavorTarget(type_id=517)
+        self.assertEqual(addons.pick_file(files, retail)["id"], 2)
+        self.assertEqual(addons.pick_file(files, addons.FlavorTarget(type_id=67408))["id"], 4)
+        self.assertIsNone(addons.pick_file(files, addons.FlavorTarget(type_id=79434)))
 
     def test_needs_update(self):
-        a = addons.TrackedAddon(1, ["X"], newest_mtime=1_800_000_000)
-        old = cf_file(9, "2020-01-01T00:00:00Z")
-        new = cf_file(10, "2030-01-01T00:00:00Z")
-        self.assertFalse(addons.needs_update(a, old, None))
-        self.assertTrue(addons.needs_update(a, new, None))
-        self.assertFalse(addons.needs_update(a, new, 10))
-        self.assertTrue(addons.needs_update(a, old, 8))  # state beats the date heuristic
+        a = addons.TrackedAddon(1, ["X"], versions=["#Details.20261015.15339.172"])
+        current = {"id": 10, "fileName": "Details-Details.20261015.15339.172.zip", "displayName": "x"}
+        newer = {"id": 11, "fileName": "Details-Details.20261101.1.1.zip", "displayName": "x"}
+        self.assertFalse(addons.needs_update(a, current, None))  # version is in the release name
+        self.assertTrue(addons.needs_update(a, newer, None))  # unknown -> download
+        self.assertFalse(addons.needs_update(a, newer, 11))  # recorded id wins
+        self.assertTrue(addons.needs_update(a, current, 9))
+        unversioned = addons.TrackedAddon(2, ["Y"], versions=["@project-version@"])
+        self.assertTrue(addons.needs_update(unversioned, current, None))
 
 
 class InstallZipTests(unittest.TestCase):
@@ -205,18 +230,21 @@ class UpdateInstallTests(unittest.TestCase):
     def test_updates_outdated_and_skips_current(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, d = self.setup_wow(tmp)
-            make_addon(d, "Old", 1, mtime=1_700_000_000)  # installed long before the new release
-            make_addon(d, "Current", 2, mtime=1_900_000_000)  # newer than its latest release
+            make_addon(d, "Old", 1)
+            make_addon(d, "Current", 2, version="2.0.1")
+            make_addon(d, "HandMade")
             client = FakeClient(
                 {
                     1: [cf_file(11, "2030-01-01T00:00:00Z")],
-                    2: [cf_file(22, "2026-01-01T00:00:00Z")],
+                    2: [dict(cf_file(22), fileName="Current-2.0.1.zip")],
                 },
                 {11: {"Old/Old.toc": "## X-Curse-Project-ID: 1\n", "Old/v2.lua": "2"}},
             )
             state: dict = {}
             res = addons.update_install("_retail_", root, d, client, state)
             self.assertEqual(res["updated"], ["Old"])
+            self.assertEqual(res["current"], 1)
+            self.assertEqual(res["untracked"], 1)
             self.assertEqual(res["failed"], [])
             self.assertEqual(client.downloaded, [11])
             self.assertTrue((d / "Old" / "v2.lua").exists())
@@ -227,11 +255,39 @@ class UpdateInstallTests(unittest.TestCase):
             self.assertEqual(res2["updated"], [])
             self.assertEqual(client.downloaded, [11])
 
+    def test_unknown_state_downloads_instead_of_assuming_current(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, d = self.setup_wow(tmp)
+            make_addon(d, "Foo", 1)  # no matching version in the release name
+            client = FakeClient({1: [cf_file(5)]}, {5: {"Foo/Foo.toc": "## X-Curse-Project-ID: 1\n"}})
+            res = addons.update_install("_retail_", root, d, client, {})
+            self.assertEqual(res["updated"], ["Foo"])
+
+    def test_no_release_for_this_version_is_not_a_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, d = self.setup_wow(tmp)
+            make_addon(d, "RetailOnly", 1)
+            client = FakeClient({1: [cf_file(5, types=(67408,))]}, {})
+            res = addons.update_install("_retail_", root, d, client, {})
+            self.assertEqual((res["incompatible"], res["failed"], res["updated"]), (1, [], []))
+
+    def test_classic_folder_matches_on_client_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "World of Warcraft"
+            d = root / "_classic_" / "Interface" / "AddOns"
+            d.mkdir(parents=True)
+            (root / ".build.info").write_text(BUILD_INFO)  # wow_classic = 5.5.x
+            make_addon(d, "Foo", 1)
+            f = dict(cf_file(7, types=(81212,)), gameVersions=["3.4.5", "5.5.4"])
+            client = FakeClient({1: [f]}, {7: {"Foo/Foo.toc": "## X-Curse-Project-ID: 1\n"}})
+            res = addons.update_install("_classic_", root, d, client, {})
+            self.assertEqual(res["updated"], ["Foo"])
+
     def test_one_failure_does_not_stop_the_rest(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, d = self.setup_wow(tmp)
-            make_addon(d, "Bad", 1, mtime=1_700_000_000)
-            make_addon(d, "Good", 2, mtime=1_700_000_000)
+            make_addon(d, "Bad", 1)
+            make_addon(d, "Good", 2)
             client = FakeClient(
                 {1: [cf_file(11, "2030-01-01T00:00:00Z")], 2: [cf_file(22, "2030-01-01T00:00:00Z")]},
                 {11: {"../escape": "x"}, 22: {"Good/Good.toc": "ok"}},
