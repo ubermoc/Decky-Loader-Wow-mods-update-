@@ -42,6 +42,20 @@ function describeBuild(version: string | null | undefined, build: string | null 
   return version && version !== "unknown" ? `${version} (${short})` : short;
 }
 
+// Steam's game id for a non-Steam shortcut is (appid << 32) | 0x02000000.
+// The appid from shortcuts.vdf is an unsigned 32-bit value, so BigInt keeps it exact.
+function shortcutGameId(appId: number): string {
+  return ((BigInt(appId >>> 0) << 32n) | 0x02000000n).toString();
+}
+
+function launchShortcut(appId: number): void {
+  // Typed loosely on purpose: this API is undocumented and unverified on a real Deck.
+  const steam = (window as unknown as { SteamClient?: { Apps?: { RunGame?: (...a: unknown[]) => void } } })
+    .SteamClient;
+  if (!steam?.Apps?.RunGame) throw new Error("SteamClient.Apps.RunGame is not available");
+  steam.Apps.RunGame(shortcutGameId(appId), "", -1, 100);
+}
+
 function formatModified(epochSeconds: number | null): string {
   if (epochSeconds === null) return "never";
   return new Date(epochSeconds * 1000).toLocaleString();
@@ -191,8 +205,9 @@ function UpdatesSection() {
 function MainContent() {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh =useCallback(async () => {
     setBusy(true);
     try {
       setResult(await scan());
@@ -241,6 +256,27 @@ function MainContent() {
     <>
       <InstallList installs={result.installs} />
       <PanelSection>
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            disabled={busy}
+            onClick={() => {
+              try {
+                launchShortcut(result.curseforge!.app_id);
+                setLaunchError(null);
+              } catch (err) {
+                setLaunchError(String(err));
+              }
+            }}
+          >
+            Launch CurseForge
+          </ButtonItem>
+        </PanelSectionRow>
+        {launchError && (
+          <PanelSectionRow>
+            <Field focusable label={`Could not launch: ${launchError}`} bottomSeparator="none" />
+          </PanelSectionRow>
+        )}
         <PanelSectionRow>
           <ButtonItem layout="below" disabled={busy} onClick={refresh}>
             Rescan

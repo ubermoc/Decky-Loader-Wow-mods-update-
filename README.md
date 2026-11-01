@@ -16,7 +16,7 @@ Everything is read-only: the plugin never writes to `shortcuts.vdf`, your WoW fo
 | Detect the CurseForge shortcut | done (untested on a real Deck) |
 | List WoW versions | done (untested on a real Deck) |
 | Updates section (installed vs latest, Install update button) | done; the first install of it must be done with the curl commands below |
-| Launch CurseForge from the plugin | not started: needs testing on a Deck |
+| Launch CurseForge from the plugin | done (untested on a real Deck; uses the undocumented `SteamClient.Apps.RunGame`) |
 | "Updated just now" detection after CurseForge closes | not started |
 | Per-version update (driving the CurseForge UI) | not started: unverified that this is possible |
 
