@@ -94,6 +94,12 @@ const checkAddons = callable<[string], { ok: boolean; error: string | null; resu
   "check_addons",
 );
 const updateAddon = callable<[string, number], { ok: boolean; error: string | null; latest?: string }>("update_addon");
+const diagnoseApp = callable<[], { ok: boolean; error: string | null; summary?: string; path?: string }>(
+  "diagnose_curseforge_app",
+);
+const updateAddonViaApp = callable<[string, string], { ok: boolean; error: string | null; message?: string }>(
+  "update_addon_through_app",
+);
 const setAutoUpdate = callable<[boolean], { auto_update: boolean }>("set_auto_update");
 const getUpdateInfo = callable<[], UpdateInfo>("get_update_info");
 const installUpdate = callable<[], InstallResult>("install_update");
@@ -318,6 +324,34 @@ function AddonUpdates({
           Update through the CurseForge app
         </ButtonItem>
       </PanelSectionRow>
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          disabled={busy}
+          description="Opens CurseForge, reads how its My Addons screen is built, saves it to the plugin's settings folder and shows a summary. For fixing the slow update route."
+          onClick={async () => {
+            setBusy(true);
+            setMessage("Preparing CurseForge...");
+            try {
+              const prep = await prepareApp();
+              if (!prep.ok) {
+                setMessage(prep.error ?? "Couldn't prepare CurseForge.");
+                return;
+              }
+              setMessage("Opening CurseForge...");
+              launchShortcut(curseforge.app_id, withDebugFlag(curseforge.launch_options));
+              const r = await diagnoseApp();
+              setMessage(r.ok ? `${r.summary}\nSaved to ${r.path}` : (r.error ?? "Failed."));
+            } catch (err) {
+              setMessage(`Diagnostic failed: ${String(err)}`);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Diagnose CurseForge app
+        </ButtonItem>
+      </PanelSectionRow>
       {installs.length > 1 &&
         installs.map((install) => (
           <PanelSectionRow key={install.addons_path}>
@@ -351,7 +385,16 @@ function describeCheck(row: AddonRow, check: AddonCheck | undefined, checking: b
   }
 }
 
-function YourAddons({ installs, onDone }: { installs: WowInstall[]; onDone: () => void }) {
+function YourAddons({
+  installs,
+  curseforge,
+  onDone,
+}: {
+  installs: WowInstall[];
+  curseforge: { app_id: number; launch_options: string };
+  onDone: () => void;
+}) {
+  const [viaApp, setViaApp] = useState(false);
   const [selected, setSelected] = useState<string | null>(installs[0]?.addons_path ?? null);
   const [list, setList] = useState<AddonList | null>(null);
   const [checks, setChecks] = useState<Record<string, AddonCheck>>({});
@@ -412,6 +455,33 @@ function YourAddons({ installs, onDone }: { installs: WowInstall[]; onDone: () =
     [selected, load, onDone],
   );
 
+  // Slow route: open CurseForge, press that addon's own Update button there, close it again.
+  const updateThroughApp = useCallback(
+    async (folder: string, label: string) => {
+      if (!selected) return;
+      setBusyId(-1);
+      setMessage(`Preparing CurseForge for ${label}...`);
+      try {
+        const prep = await prepareApp();
+        if (!prep.ok) {
+          setMessage(prep.error ?? "Couldn't prepare CurseForge.");
+          return;
+        }
+        setMessage(`Opening CurseForge to update ${label}. This takes about a minute.`);
+        launchShortcut(curseforge.app_id, withDebugFlag(curseforge.launch_options));
+        const r = await updateAddonViaApp(selected, folder);
+        setMessage(r.ok ? (r.message ?? "Done.") : `${label}: ${r.error ?? "failed"}`);
+        onDone();
+        await load(selected);
+      } catch (err) {
+        setMessage(`${label}: ${String(err)}`);
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [selected, curseforge, load, onDone],
+  );
+
   if (installs.length === 0) return null;
 
   return (
@@ -422,6 +492,14 @@ function YourAddons({ installs, onDone }: { installs: WowInstall[]; onDone: () =
           rgOptions={installs.map((i) => ({ data: i.addons_path, label: i.label }))}
           selectedOption={selected}
           onChange={(option) => setSelected(option.data as string)}
+        />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ToggleField
+          label="Use the CurseForge app (slow)"
+          description="Opens CurseForge for each update and presses its own Update button. Also works for addons without a CurseForge ID. Uses the WoW version CurseForge has selected."
+          checked={viaApp}
+          onChange={setViaApp}
         />
       </PanelSectionRow>
       {list === null && !message && (
@@ -447,11 +525,15 @@ function YourAddons({ installs, onDone }: { installs: WowInstall[]; onDone: () =
             <PanelSectionRow key={row.project_id}>
               <ButtonItem
                 layout="below"
-                disabled={busyId !== null || check?.status === "incompatible"}
+                disabled={busyId !== null || (!viaApp && check?.status === "incompatible")}
                 description={describeCheck(row, check, checking)}
-                onClick={() => updateOne(row)}
+                onClick={() => (viaApp ? updateThroughApp(row.folders[0], row.name) : updateOne(row))}
               >
-                {busyId === row.project_id ? "Updating..." : `${hasUpdate ? "Update" : "Reinstall"} ${row.name}`}
+                {busyId === row.project_id || (busyId === -1 && viaApp)
+                  ? "Working..."
+                  : viaApp
+                    ? `Update ${row.name} through CurseForge`
+                    : `${hasUpdate ? "Update" : "Reinstall"} ${row.name}`}
               </ButtonItem>
             </PanelSectionRow>
           );
@@ -459,12 +541,23 @@ function YourAddons({ installs, onDone }: { installs: WowInstall[]; onDone: () =
       {list?.ok &&
         list.untracked.map((name) => (
           <PanelSectionRow key={`untracked-${name}`}>
-            <Field
-              focusable
-              label={name}
-              description="No CurseForge ID in its .toc, so it can't be updated here. Add a ## X-Curse-Project-ID line to enable it."
-              bottomSeparator="none"
-            />
+            {viaApp ? (
+              <ButtonItem
+                layout="below"
+                disabled={busyId !== null}
+                description="No CurseForge ID in its .toc; updated using CurseForge's own record of it."
+                onClick={() => updateThroughApp(name, name)}
+              >
+                {busyId === -1 ? "Working..." : `Update ${name} through CurseForge`}
+              </ButtonItem>
+            ) : (
+              <Field
+                focusable
+                label={name}
+                description="No CurseForge ID in its .toc, so it can't be updated directly. Add a ## X-Curse-Project-ID line, or turn on 'Use the CurseForge app'."
+                bottomSeparator="none"
+              />
+            )}
           </PanelSectionRow>
         ))}
       {message && (
@@ -649,7 +742,7 @@ function MainContent() {
   return (
     <>
       <InstallList installs={result.installs} updated={updated} />
-      <YourAddons installs={result.installs} onDone={refresh} />
+      <YourAddons installs={result.installs} curseforge={result.curseforge} onDone={refresh} />
       <AddonUpdates installs={result.installs} curseforge={result.curseforge} onDone={refresh} />
       <PanelSection>
         <PanelSectionRow>

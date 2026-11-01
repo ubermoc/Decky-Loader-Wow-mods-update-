@@ -373,6 +373,18 @@ class SingleAddonTests(unittest.TestCase):
             self.assertTrue((d / "Foo" / "Foo.toc").exists())
 
 
+class NamesTests(unittest.TestCase):
+    def test_names_include_folder_and_clean_title(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "UbermocUI").mkdir()
+            (d / "UbermocUI" / "UbermocUI.toc").write_text("## Title: |cff00ff00Ubermoc UI|r\n## Version: 1\n")
+            self.assertEqual(addons.names_for(d, "UbermocUI"), ["UbermocUI", "Ubermoc UI"])
+            (d / "Plain").mkdir()
+            self.assertEqual(addons.names_for(d, "Plain"), ["Plain"])
+            self.assertEqual(addons.names_for(d, "Missing"), ["Missing"])
+
+
 class WowRunningTests(unittest.TestCase):
     def test_detects_wow_process(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -50,8 +50,12 @@ def _server_frame(text: str) -> bytes:
 class FakeApp:
     """Speaks just enough of Chromium's DevTools HTTP + WebSocket protocol."""
 
-    def __init__(self, button_states):
+    def __init__(self, button_states, row_states=None, row_count=3, dump=None):
         self.states = list(button_states)  # successive replies to the FIND script
+        self.row_states = list(row_states or [])
+        self.row_count = row_count
+        self.dump = dump or {"hash": "#/game/1/my-library/my-addons", "rows": []}
+        self.row_clicks = 0
         self.clicks = 0
         self.closed = False
         self.srv = socket.socket()
@@ -113,7 +117,18 @@ class FakeApp:
             result = {}
             if method == "Runtime.evaluate":
                 expr = params["expression"]
-                if expr == cdp.FIND_JS:
+                if "/*ROW_COUNT*/" in expr:
+                    result = {"result": {"type": "number", "value": self.row_count}}
+                elif "/*ROW_DUMP*/" in expr:
+                    result = {"result": {"type": "object", "value": self.dump}}
+                elif "/*ROW_FIND*/" in expr:
+                    if "const CLICK = true" in expr:
+                        self.row_clicks += 1
+                    state = self.row_states.pop(0) if len(self.row_states) > 1 else self.row_states[0]
+                    if "const CLICK = true" in expr and state.get("action") == "update":
+                        state = dict(state, clicked=True)
+                    result = {"result": {"type": "object", "value": state}}
+                elif expr == cdp.FIND_JS:
                     state = self.states.pop(0) if len(self.states) > 1 else self.states[0]
                     result = {"result": {"type": "object", "value": state}}
                 elif expr == cdp.NAVIGATE_JS:
@@ -185,6 +200,66 @@ class DriveAppTests(unittest.TestCase):
             cdp.update_all_through_app(port=port, sleep=NOSLEEP, start_timeout=0.2)
         self.assertIn("--remote-debugging-port=9222", str(ctx.exception))
         self.assertIn("launch options", str(ctx.exception))
+
+
+class RowTests(unittest.TestCase):
+    NAMES = ["UbermocUI", "Ubermoc UI"]
+
+    def app(self, row_states, **kw):
+        app = FakeApp([{"found": False}], row_states=row_states, **kw)
+        self.addCleanup(app.stop)
+        return app
+
+    def run_row(self, app, **kw):
+        return cdp.update_row_through_app(
+            self.NAMES, port=app.port, sleep=NOSLEEP, start_timeout=3, finish_timeout=5, find_timeout=0.2, **kw
+        )
+
+    def test_presses_update_for_the_addon_waits_and_closes(self):
+        pending = {"found": True, "action": "update", "matches": 1}
+        done = {"found": True, "action": "up to date", "matches": 1}
+        app = self.app([pending, pending, done, done])
+        result = self.run_row(app)
+        self.assertTrue(result["clicked"])
+        self.assertEqual(app.row_clicks, 1)
+        self.assertTrue(app.closed)
+
+    def test_already_up_to_date_does_not_click(self):
+        app = self.app([{"found": True, "action": "up to date", "matches": 1}])
+        result = self.run_row(app)
+        self.assertFalse(result["clicked"])
+        self.assertEqual(app.row_clicks, 0)
+        self.assertIn("already up to date", result["message"])
+        self.assertTrue(app.closed)
+
+    def test_addon_not_in_the_list_explains_and_still_closes(self):
+        app = self.app([{"found": False, "rows": 3}])
+        with self.assertRaises(cdp.CdpError) as ctx:
+            self.run_row(app)
+        self.assertIn("Couldn't find UbermocUI", str(ctx.exception))
+        self.assertIn("3 rows seen", str(ctx.exception))
+        self.assertTrue(app.closed)
+
+    def test_list_never_appearing_is_reported(self):
+        app = self.app([{"found": False, "rows": 0}], row_count=0)
+        with self.assertRaises(cdp.CdpError) as ctx:
+            cdp.update_row_through_app(self.NAMES, port=app.port, sleep=NOSLEEP, start_timeout=0.2)
+        self.assertIn("addon list never appeared", str(ctx.exception))
+        self.assertTrue(app.closed)
+
+    def test_dump_returns_the_page_structure_and_closes(self):
+        dump = {"hash": "#/game/1/my-library/my-addons", "rows": [{"action": "Update", "rowText": "Ubermoc UI"}]}
+        app = FakeApp([{"found": False}], row_states=[{"found": False}], dump=dump)
+        self.addCleanup(app.stop)
+        result = cdp.dump_my_addons(port=app.port, sleep=NOSLEEP, start_timeout=3)
+        self.assertEqual(result["rows"][0]["rowText"], "Ubermoc UI")
+        self.assertTrue(app.closed)
+
+    def test_row_script_embeds_names_safely(self):
+        js = cdp.row_find_js(['Evil"); alert(1); ("', "UbermocUI"], False)
+        self.assertIn('Evil\\"); alert(1); (\\"', js)  # JSON-escaped, can't break out of the string
+        self.assertIn("const CLICK = false", js)
+        self.assertIn("const CLICK = true", cdp.row_find_js(["x"], True))
 
 
 if __name__ == "__main__":

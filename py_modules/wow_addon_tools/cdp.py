@@ -112,7 +112,10 @@ class WebSocket:
 
     def _read(self, n: int) -> bytes:
         while len(self._buf) < n:
-            chunk = self.sock.recv(65536)
+            try:
+                chunk = self.sock.recv(65536)
+            except socket.timeout:
+                raise CdpError("CurseForge didn't answer in time (its window may still be starting).") from None
             if not chunk:
                 raise CdpError("The app closed the debugging connection.")
             self._buf += chunk
@@ -298,3 +301,210 @@ def _press_update_all(port: int, start_timeout: float, finish_timeout: float, po
     finally:
         cdp.close()
     return result
+
+
+# ---------------------------------------------------------------- rows (per-addon actions)
+#
+# The real page markup has not been seen (only the toolbar button's class name, read from the
+# app's code, and a photo of the screen). So rows are found by what is visible on screen: each
+# row has a text button reading "Update" or "Up to date". A row is the largest ancestor that
+# contains exactly one such button; it belongs to an addon when its text contains one of the
+# addon's names (folder name or .toc title, letters and digits only, case-insensitive).
+
+_ROW_HELPERS = r"""
+const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const ACTIONS = ['update', 'up to date', 'updating', 'updating...', 'installing', 'installed', 'updated'];
+const textOf = e => (e.textContent || '').replace(/\s+/g, ' ').trim();
+const isAction = e => ACTIONS.includes(textOf(e).toLowerCase());
+const actions = [...document.querySelectorAll('button, a, [role=button], div, span, td')]
+  .filter(e => isAction(e) && ![...e.children].some(isAction));
+const rowOf = el => {
+  let row = el;
+  while (row.parentElement) {
+    const p = row.parentElement;
+    if (actions.filter(a => p.contains(a)).length > 1) break;
+    row = p;
+  }
+  return row;
+};
+"""
+
+
+def row_find_js(names: list[str], click: bool) -> str:
+    """Find the row for an addon by name; optionally press its Update button."""
+    return (
+        "(() => { /*ROW_FIND*/ " + _ROW_HELPERS
+        + f"const NAMES = {json.dumps(names)}.map(norm).filter(n => n.length >= 3);"
+        + f"const CLICK = {'true' if click else 'false'};"
+        + r"""
+  const hits = [];
+  for (const a of actions) {
+    const row = rowOf(a);
+    const rn = norm(textOf(row));
+    const best = Math.max(0, ...NAMES.map(n => (rn.includes(n) ? n.length : 0)));
+    if (best) hits.push({a, row, best});
+  }
+  if (!hits.length) return {found: false, rows: actions.length};
+  hits.sort((x, y) => y.best - x.best);
+  const h = hits[0];
+  const action = textOf(h.a).toLowerCase();
+  let clicked = false;
+  if (CLICK && action === 'update') { (h.a.closest('button, [role=button], a') || h.a).click(); clicked = true; }
+  return {found: true, matches: hits.length, action: action, rowText: textOf(h.row).slice(0, 160), clicked: clicked};
+})()"""
+    )
+
+
+ROWS_COUNT_JS = "(() => { /*ROW_COUNT*/ " + _ROW_HELPERS + " return actions.length; })()"
+
+DUMP_JS = (
+    "(() => { /*ROW_DUMP*/ "
+    + _ROW_HELPERS
+    + r"""
+  const trim = (s, n) => (s || '').slice(0, n);
+  const btn = document.querySelector('.update-all');
+  return {
+    hash: location.hash,
+    title: document.title,
+    updateAll: btn ? {tag: btn.tagName, cls: btn.className, label: btn.getAttribute('aria-label'), text: textOf(btn),
+                      html: trim(btn.parentElement ? btn.parentElement.outerHTML : btn.outerHTML, 1500)} : null,
+    actionCount: actions.length,
+    rows: actions.slice(0, 12).map(a => {
+      const row = rowOf(a);
+      return {action: textOf(a), tag: a.tagName, cls: a.className, rowTag: row.tagName, rowCls: row.className,
+              rowText: trim(textOf(row), 200), rowHtml: trim(row.outerHTML, 1400)};
+    }),
+    flavorPicker: trim(textOf(document.body).slice(0, 600), 600)
+  };
+})()"""
+)
+
+
+class _Page:
+    """The app's main window. If a call times out (the window is busy, e.g. still starting) the
+    connection is dropped and re-opened, because a half-read reply can't be resumed safely."""
+
+    def __init__(self, port: int, sleep: Callable[[float], None], timeout: float):
+        self.port, self.sleep, self.timeout = port, sleep, timeout
+        self.session: Optional[Cdp] = None
+        self._reconnect()
+
+    def _reconnect(self) -> None:
+        self.close()
+        self.session = _open_page(self.port, self.sleep, self.timeout)
+
+    def evaluate(self, expression: str, attempts: int = 3) -> Any:
+        last: Optional[Exception] = None
+        for attempt in range(attempts):
+            try:
+                assert self.session is not None
+                return self.session.evaluate(expression)
+            except (CdpError, OSError, AssertionError) as exc:
+                last = exc
+                if attempt + 1 < attempts:
+                    self.sleep(2.0)
+                    self._reconnect()
+        raise CdpError(str(last) if isinstance(last, CdpError) else "CurseForge's window stopped answering.")
+
+    def close(self) -> None:
+        if self.session is not None:
+            self.session.close()
+            self.session = None
+
+
+def _open_page(port: int, sleep: Callable[[float], None], timeout: float) -> Cdp:
+    """Connect to the app's main window and go to WoW's My Addons."""
+    deadline = time.monotonic() + timeout
+    while True:
+        for target in http_json("/json", port):
+            if target.get("type") == "page" and target.get("webSocketDebuggerUrl"):
+                try:
+                    session = Cdp(target["webSocketDebuggerUrl"])
+                    session.evaluate(NAVIGATE_JS)
+                    return session
+                except (CdpError, OSError, ValueError):
+                    continue
+        if time.monotonic() >= deadline:
+            raise CdpError(
+                "CurseForge started but its window isn't reachable. Close CurseForge completely and try again."
+            )
+        sleep(2.0)
+
+
+def _wait_for_rows(session: _Page, timeout: float, poll: float, sleep: Callable[[float], None]) -> int:
+    deadline = time.monotonic() + timeout
+    while True:
+        count = session.evaluate(ROWS_COUNT_JS) or 0
+        if count:
+            return int(count)
+        if time.monotonic() >= deadline:
+            raise CdpError(
+                "CurseForge opened but its addon list never appeared. Make sure World of Warcraft is added in "
+                "CurseForge (Add a Game / Scan Now) and has addons, then try again."
+            )
+        sleep(poll)
+
+
+def dump_my_addons(
+    port: int = DEFAULT_PORT,
+    start_timeout: float = 90.0,
+    poll: float = 3.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    """Read the structure of the My Addons screen (for development), then close the app."""
+    wait_for_port(port, start_timeout, sleep)
+    try:
+        session = _Page(port, sleep, start_timeout)
+        try:
+            _wait_for_rows(session, start_timeout, poll, sleep)
+            sleep(2.0)  # let the list finish rendering
+            return session.evaluate(DUMP_JS) or {}
+        finally:
+            session.close()
+    finally:
+        close_app(port)
+
+
+def update_row_through_app(
+    names: list[str],
+    port: int = DEFAULT_PORT,
+    start_timeout: float = 90.0,
+    finish_timeout: float = 10 * 60.0,
+    poll: float = 3.0,
+    sleep: Callable[[float], None] = time.sleep,
+    find_timeout: float = 15.0,
+) -> dict[str, Any]:
+    """Press the Update button on one addon's row in the running app, wait, then close the app."""
+    wait_for_port(port, start_timeout, sleep)
+    try:
+        session = _Page(port, sleep, start_timeout)
+        try:
+            _wait_for_rows(session, start_timeout, poll, sleep)
+            deadline = time.monotonic() + find_timeout
+            state = session.evaluate(row_find_js(names, False)) or {}
+            while not state.get("found") and time.monotonic() < deadline:
+                sleep(poll)
+                state = session.evaluate(row_find_js(names, False)) or {}
+            if not state.get("found"):
+                raise CdpError(
+                    f"Couldn't find {names[0]} in CurseForge's My Addons list ({state.get('rows', 0)} rows seen). "
+                    "CurseForge shows the WoW version you used last; switch it to the right one inside CurseForge."
+                )
+            if state.get("action") != "update":
+                return {"ok": True, "clicked": False, "message": f"CurseForge says {names[0]} is already up to date."}
+            if not (session.evaluate(row_find_js(names, True)) or {}).get("clicked"):
+                raise CdpError(f"Couldn't press Update for {names[0]}.")
+            quiet = 0
+            deadline = time.monotonic() + finish_timeout
+            while quiet < 2:
+                if time.monotonic() >= deadline:
+                    raise CdpError(f"CurseForge was still updating {names[0]} after 10 minutes; closed it.")
+                sleep(poll)
+                now = session.evaluate(row_find_js(names, False)) or {}
+                done = (not now.get("found")) or now.get("action") not in ("update", "updating", "updating...", "installing")
+                quiet = quiet + 1 if done else 0
+            return {"ok": True, "clicked": True, "message": f"Updated {names[0]} through CurseForge."}
+        finally:
+            session.close()
+    finally:
+        close_app(port)

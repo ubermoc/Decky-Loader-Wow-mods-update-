@@ -183,6 +183,26 @@ def discover(addons_dir: Path) -> Discovery:
     return Discovery(list(grouped.values()), untracked)
 
 
+_TITLE = re.compile(r"^\s*##\s*Title\s*:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+_COLOR_CODES = re.compile(r"\|c[0-9a-fA-F]{8}|\|r|\|T[^|]*\|t|\|n")
+
+
+def names_for(addons_dir: Path, folder: str) -> list[str]:
+    """Names an addon may be shown under in another app: its folder and its .toc titles."""
+    names = [folder]
+    try:
+        for toc in sorted((addons_dir / folder).glob("*.toc")):
+            with open(toc, "rb") as fh:
+                match = _TITLE.search(fh.read(65536).decode("utf-8", "replace"))
+            if match:
+                title = _COLOR_CODES.sub("", match.group(1)).strip()
+                if title and title not in names:
+                    names.append(title)
+    except OSError:
+        pass
+    return names
+
+
 # ---------------------------------------------------------------- choosing a file
 
 def _created(file: dict[str, Any]) -> float:

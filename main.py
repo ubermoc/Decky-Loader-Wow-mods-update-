@@ -136,6 +136,61 @@ def _prepare_curseforge_app() -> dict:
     return {"ok": True, "error": None}
 
 
+def _run_app_task(task, what: str) -> dict:
+    """Run a CurseForge-app task, then always let the app finish closing and restore its settings."""
+    try:
+        return task()
+    except cdp.CdpError as exc:
+        decky.logger.warning(f"curseforge app ({what}): {exc}")
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        decky.logger.exception(f"curseforge app ({what}) crashed")
+        return {"ok": False, "error": f"Unexpected error: {exc}"}
+    finally:
+        for _ in range(15):
+            if not cfconfig.curseforge_running():
+                break
+            time.sleep(1)
+        _restore_pending_dev_mode()
+
+
+def _diagnose_curseforge_app() -> dict:
+    """Read the structure of CurseForge's My Addons screen and save it for debugging."""
+
+    def task() -> dict:
+        dump = cdp.dump_my_addons()
+        _save_json("curseforge_dump.json", dump)
+        path = str(_settings_dir() / "curseforge_dump.json")
+        decky.logger.info(f"curseforge dump saved to {path}: {json.dumps(dump)[:3000]}")
+        lines = [f"Route {dump.get('hash')}", f"{dump.get('actionCount', 0)} rows found"]
+        ua = dump.get("updateAll")
+        lines.append(f"Update all: {ua['tag']}.{ua['cls']} \"{ua['label'] or ua['text']}\"" if ua else "Update all button: not found")
+        for row in (dump.get("rows") or [])[:6]:
+            lines.append(f"[{row.get('action')}] {row.get('rowTag')}.{row.get('rowCls', '')[:30]} {row.get('rowText', '')[:70]}")
+        return {"ok": True, "error": None, "summary": "\n".join(lines), "path": path}
+
+    return _run_app_task(task, "diagnose")
+
+
+def _update_addon_through_app(addons_path: str, folder: str) -> dict:
+    install = _install_for(addons_path)
+    if install is None:
+        return {"ok": False, "error": "That WoW version wasn't found any more. Press Rescan."}
+    if not folder or "/" in folder or "\\" in folder or folder.startswith("."):
+        return {"ok": False, "error": "Invalid addon name."}
+    addons_dir = Path(install.addons_path)
+    if not (addons_dir / folder).is_dir():
+        return {"ok": False, "error": f"{folder} isn't installed any more. Press Rescan."}
+    names = addons.names_for(addons_dir, folder)
+
+    def task() -> dict:
+        result = cdp.update_row_through_app(names)
+        decky.logger.info(f"curseforge app row update {names}: {result}")
+        return {"ok": True, "error": None, "clicked": result["clicked"], "message": result["message"]}
+
+    return _run_app_task(task, f"update {folder}")
+
+
 def _drive_curseforge_app() -> dict:
     """Blocking: press "Update all" in the already-launched CurseForge app, then close it."""
     try:
@@ -334,6 +389,16 @@ class Plugin:
         """Install the newest release of ONE addon."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _update_one_addon, addons_path, project_id)
+
+    async def diagnose_curseforge_app(self) -> dict:
+        """Call after prepare_curseforge_app and launching CurseForge."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _diagnose_curseforge_app)
+
+    async def update_addon_through_app(self, addons_path: str, folder: str) -> dict:
+        """Call after prepare_curseforge_app and launching CurseForge."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _update_addon_through_app, addons_path, folder)
 
     async def prepare_curseforge_app(self) -> dict:
         """Call before launching CurseForge for update_via_curseforge_app."""
