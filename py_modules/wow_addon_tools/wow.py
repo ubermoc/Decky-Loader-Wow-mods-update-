@@ -111,6 +111,31 @@ def _looks_like_flavor(path: Path) -> bool:
         return False
 
 
+def _addons_summary(addons: Path) -> tuple[int, float | None]:
+    """Addon folder count and the newest change anywhere that marks an update.
+
+    The AddOns directory's own mtime only moves when a folder is added or removed.
+    An in-place update touches the addon's folder or its .toc file instead, so
+    take the newest of those too (one level deep, so it stays cheap).
+    """
+    count = 0
+    try:
+        newest = addons.stat().st_mtime
+        for entry in addons.iterdir():
+            if not entry.is_dir():
+                continue
+            count += 1
+            try:
+                newest = max(newest, entry.stat().st_mtime)
+                for toc in entry.glob("*.toc"):
+                    newest = max(newest, toc.stat().st_mtime)
+            except OSError:
+                continue
+    except OSError:
+        return count, None
+    return count, newest
+
+
 def scan_root(root: Path) -> list[WowInstall]:
     installs: list[WowInstall] = []
     try:
@@ -126,11 +151,7 @@ def scan_root(root: Path) -> list[WowInstall]:
         count = 0
         modified: float | None = None
         if addons.is_dir():
-            try:
-                count = sum(1 for p in addons.iterdir() if p.is_dir())
-                modified = addons.stat().st_mtime
-            except OSError:
-                pass
+            count, modified = _addons_summary(addons)
         installs.append(
             WowInstall(
                 flavor=child.name,

@@ -56,6 +56,18 @@ function launchShortcut(appId: number): void {
   steam.Apps.RunGame(shortcutGameId(appId), "", -1, 100);
 }
 
+// addons_modified per AddOns folder at the moment CurseForge was launched. Module-level so it
+// survives the quick-access panel being closed and reopened while CurseForge runs.
+let launchSnapshot: Record<string, number | null> | null = null;
+
+function relativeAge(epochSeconds: number): string {
+  const mins = Math.max(0, Math.round((Date.now() / 1000 - epochSeconds) / 60));
+  if (mins < 2) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  return hours < 24 ? `${hours} h ago` : formatModified(epochSeconds);
+}
+
 function formatModified(epochSeconds: number | null): string {
   if (epochSeconds === null) return "never";
   return new Date(epochSeconds * 1000).toLocaleString();
@@ -87,7 +99,7 @@ function SetupInstructions({ onRecheck }: { onRecheck: () => void }) {
   );
 }
 
-function InstallList({ installs }: { installs: WowInstall[] }) {
+function InstallList({ installs, updated }: { installs: WowInstall[]; updated: Set<string> }) {
   if (installs.length === 0) {
     return (
       <PanelSection title="World of Warcraft">
@@ -108,7 +120,11 @@ function InstallList({ installs }: { installs: WowInstall[] }) {
           <Field
             focusable
             label={install.label}
-            description={`${install.addon_count} addons - AddOns changed ${formatModified(install.addons_modified)}`}
+            description={
+              updated.has(install.addons_path) && install.addons_modified !== null
+                ? `${install.addon_count} addons - Updated ${relativeAge(install.addons_modified)}`
+                : `${install.addon_count} addons - AddOns changed ${formatModified(install.addons_modified)}`
+            }
             bottomSeparator="none"
           />
         </PanelSectionRow>
@@ -220,6 +236,38 @@ function MainContent() {
     void refresh();
   }, [refresh]);
 
+  // Rescan when CurseForge closes. Typed loosely: undocumented Steam API, unverified on a Deck.
+  // If the notification never fires, reopening the panel rescans anyway.
+  const curseforgeId = result?.curseforge?.app_id;
+  useEffect(() => {
+    if (curseforgeId === undefined) return;
+    const sessions = (
+      window as unknown as {
+        SteamClient?: {
+          GameSessions?: {
+            RegisterForAppLifetimeNotifications?: (
+              cb: (n: { unAppID: number; bRunning: boolean }) => void,
+            ) => { unregister?: () => void } | undefined;
+          };
+        };
+      }
+    ).SteamClient?.GameSessions;
+    const reg = sessions?.RegisterForAppLifetimeNotifications?.((n) => {
+      if (!n.bRunning && n.unAppID >>> 0 === curseforgeId >>> 0) void refresh();
+    });
+    return () => reg?.unregister?.();
+  }, [curseforgeId, refresh]);
+
+  const updated = new Set<string>();
+  if (result?.ok && launchSnapshot) {
+    for (const install of result.installs) {
+      const before = launchSnapshot[install.addons_path];
+      if (before !== undefined && install.addons_modified !== null && (before === null || install.addons_modified > before)) {
+        updated.add(install.addons_path);
+      }
+    }
+  }
+
   if (result === null) {
     return (
       <PanelSection>
@@ -252,7 +300,7 @@ function MainContent() {
 
   return (
     <>
-      <InstallList installs={result.installs} />
+      <InstallList installs={result.installs} updated={updated} />
       <PanelSection>
         <PanelSectionRow>
           <ButtonItem
@@ -261,6 +309,7 @@ function MainContent() {
             onClick={() => {
               try {
                 launchShortcut(result.curseforge!.app_id);
+                launchSnapshot = Object.fromEntries(result.installs.map((i) => [i.addons_path, i.addons_modified]));
                 setLaunchError(null);
               } catch (err) {
                 setLaunchError(String(err));

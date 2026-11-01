@@ -92,6 +92,26 @@ class WowScanTests(unittest.TestCase):
             self.assertEqual(installs["_classic_era_"].label, "Classic Era")
             self.assertEqual(installs["_classic_"].addon_count, 0)
 
+    def test_in_place_update_moves_modified_time(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = self.make_home(tmp)
+            steam = home / ".local/share/Steam"
+            root = self.make_wow(steam, "1", {"_retail_": ["DBM"]})
+            addons = root / "_retail_/Interface/AddOns"
+            toc = addons / "DBM" / "DBM.toc"
+            toc.write_text("## Version: 1")
+            old = 1_000_000_000
+            for p in (toc, addons / "DBM", addons):
+                os.utime(p, (old, old))
+            before = wow.find_installs(home)[0].addons_modified
+            self.assertEqual(before, old)
+            # An update rewrites the .toc without touching the AddOns folder itself.
+            os.utime(toc, (old + 500, old + 500))
+            after = wow.find_installs(home)[0].addons_modified
+            self.assertEqual(after, old + 500)
+
     def test_finds_wow_on_second_library_from_libraryfolders(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = self.make_home(tmp)
