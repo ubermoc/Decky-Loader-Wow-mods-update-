@@ -19,7 +19,7 @@ import tempfile  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 
-from wow_addon_tools import PROVENANCE, addons, cdp, cfconfig, updater  # noqa: E402
+from wow_addon_tools import PROVENANCE, addons, cdp, cfconfig, overrides, updater  # noqa: E402
 from wow_addon_tools.shortcuts import find_all_shortcuts, find_curseforge  # noqa: E402
 from wow_addon_tools.wow import find_installs  # noqa: E402
 
@@ -52,53 +52,7 @@ def _save_json(name: str, data) -> None:
     os.replace(tmp, path)
 
 
-AUTO_FIRST_DELAY = 120  # seconds after the plugin loads
-AUTO_INTERVAL = 6 * 60 * 60
-AUTO_RETRY_WHEN_WOW_RUNNING = 30 * 60
-
 _run_lock = threading.Lock()
-_last_run: dict = {}
-
-
-def _run_addon_updates() -> dict:
-    """Blocking: update every tracked CurseForge addon (used by the automatic update only)."""
-    if not _run_lock.acquire(blocking=False):
-        return {"ok": False, "error": "An addon update is already running.", "results": []}
-    try:
-        if addons.wow_running():
-            return {"ok": False, "error": "WoW is running. Close it first so addons aren't swapped under it.", "results": []}
-        state = _load_json("state.json", {})
-        client = addons.CurseForgeClient()
-        results = []
-        for install in find_installs(_home()):
-            addons_dir = Path(install.addons_path)
-            if not addons_dir.is_dir():
-                continue
-            per_install = state.setdefault(install.addons_path, {})
-            result = addons.update_install(install.flavor, Path(install.root), addons_dir, client, per_install)
-            result["label"] = install.label
-            result["addons_path"] = install.addons_path
-            results.append(result)
-            _save_json("state.json", state)
-        run = {"ok": True, "error": None, "results": results, "finished": time.time()}
-        _last_run.clear()
-        _last_run.update(run)
-        if not results:
-            decky.logger.info("addon update: no WoW installs found")
-        for r in results:
-            decky.logger.info(
-                f"addon update {r['label']} ({r['flavor']}): tracked={r['tracked']} updated={len(r['updated'])} "
-                f"current={r['current']} no_release={r['incompatible']} no_curse_id={r['untracked']} "
-                f"failed={len(r['failed'])} error={r['error']} no_curse_id_names={r['untracked_names']}"
-            )
-            for failure in r["failed"][:10]:
-                decky.logger.warning(f"addon update {r['label']}: {failure['addon']}: {failure['error']}")
-        return run
-    except Exception as exc:
-        decky.logger.exception("addon update crashed")
-        return {"ok": False, "error": f"Unexpected error: {exc}", "results": []}
-    finally:
-        _run_lock.release()
 
 
 def _restore_pending_dev_mode() -> None:
@@ -218,11 +172,15 @@ def _install_for(addons_path: str):
     return None
 
 
+def _manual_ids(install) -> dict:
+    return overrides.get(_settings_dir(), install.addons_path)
+
+
 def _list_addons(addons_path: str) -> dict:
     install = _install_for(addons_path)
     if install is None:
         return {"ok": False, "error": "That WoW version wasn't found any more. Press Rescan.", "addons": [], "untracked": []}
-    found = addons.discover(Path(install.addons_path))
+    found = addons.discover(Path(install.addons_path), _manual_ids(install))
     state = _load_json("state.json", {}).get(install.addons_path, {})
     rows = []
     for addon in found.tracked:
@@ -233,6 +191,8 @@ def _list_addons(addons_path: str) -> dict:
                 "folders": addon.folders,
                 "version": addons._version_token(addon.versions[0]) if addon.versions else "",
                 "installed_file_known": str(addon.project_id) in state,
+                # set when the ID was typed in (not read from the .toc): the UI offers edit / remove
+                "manual_folder": addon.manual_folders[0] if addon.manual_folders else None,
             }
         )
     return {
@@ -254,7 +214,7 @@ def _check_addons(addons_path: str) -> dict:
     state = _load_json("state.json", {}).get(install.addons_path, {})
     client = addons.CurseForgeClient()
     results = {}
-    for addon in addons.discover(Path(install.addons_path)).tracked:
+    for addon in addons.discover(Path(install.addons_path), _manual_ids(install)).tracked:
         results[str(addon.project_id)] = addons.check_addon(addon, target, client, state)
     return {"ok": True, "error": None, "results": results}
 
@@ -272,7 +232,10 @@ def _update_one_addon(addons_path: str, project_id: int) -> dict:
         if target is None:
             return {"ok": False, "error": f"Can't tell which WoW version {install.flavor} is."}
         addons_dir = Path(install.addons_path)
-        addon = next((a for a in addons.discover(addons_dir).tracked if a.project_id == int(project_id)), None)
+        addon = next(
+            (a for a in addons.discover(addons_dir, _manual_ids(install)).tracked if a.project_id == int(project_id)),
+            None,
+        )
         if addon is None:
             return {"ok": False, "error": "That addon has no CurseForge ID, so it can't be updated here."}
         state = _load_json("state.json", {})
@@ -290,6 +253,63 @@ def _update_one_addon(addons_path: str, project_id: int) -> dict:
         return {"ok": False, "error": f"Unexpected error: {exc}"}
     finally:
         _run_lock.release()
+
+
+def _check_project_id(addons_path: str, text: str) -> dict:
+    """Does this project ID have a release for this WoW version? Shows its newest file, saves nothing."""
+    try:
+        project_id = overrides.parse_project_id(text)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    install = _install_for(addons_path)
+    if install is None:
+        return {"ok": False, "error": "That WoW version wasn't found any more. Press Rescan."}
+    target = addons.target_for(install.flavor, Path(install.root))
+    if target is None:
+        return {"ok": False, "error": f"Can't tell which WoW version {install.flavor} is."}
+    try:
+        file = addons.newest_file(addons.CurseForgeClient(), project_id, target)
+    except addons.AddonError as exc:
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        decky.logger.exception("project id check crashed")
+        return {"ok": False, "error": f"Unexpected error: {exc}"}
+    if file is None:
+        return {
+            "ok": False,
+            "error": f"CurseForge has no release for project {project_id} for {install.label}. Check the number.",
+        }
+    return {"ok": True, "error": None, "project_id": project_id, "latest": file.get("fileName") or file.get("displayName")}
+
+
+def _set_project_id(addons_path: str, folder: str, text: str) -> dict:
+    try:
+        project_id = overrides.parse_project_id(text)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    install = _install_for(addons_path)
+    if install is None:
+        return {"ok": False, "error": "That WoW version wasn't found any more. Press Rescan."}
+    if not folder or "/" in folder or "\\" in folder or folder.startswith("."):
+        return {"ok": False, "error": "Invalid addon name."}
+    addons_dir = Path(install.addons_path)
+    if not (addons_dir / folder).is_dir():
+        return {"ok": False, "error": f"{folder} isn't installed any more. Press Rescan."}
+    # Only addons whose .toc has no ID of its own may be given one (the .toc's own ID always wins).
+    if folder not in {n for n in addons.discover(addons_dir, _manual_ids(install)).untracked} and folder not in _manual_ids(install):
+        return {"ok": False, "error": f"{folder} already has a CurseForge ID in its files."}
+    overrides.set_id(_settings_dir(), install.addons_path, folder, project_id)
+    decky.logger.info(f"project id for {folder} ({install.flavor}) set to {project_id}")
+    return {"ok": True, "error": None, "project_id": project_id}
+
+
+def _clear_project_id(addons_path: str, folder: str) -> dict:
+    install = _install_for(addons_path)
+    if install is None:
+        return {"ok": False, "error": "That WoW version wasn't found any more. Press Rescan."}
+    removed = overrides.clear_id(_settings_dir(), install.addons_path, folder)
+    decky.logger.info(f"project id for {folder} ({install.flavor}) removed: {removed}")
+    return {"ok": True, "error": None, "removed": removed}
 
 
 class Plugin:
@@ -383,6 +403,18 @@ class Plugin:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _update_one_addon, addons_path, project_id)
 
+    async def check_project_id(self, addons_path: str, project_id: str) -> dict:
+        """Look the typed ID up on CurseForge for this WoW version (saves nothing)."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _check_project_id, addons_path, project_id)
+
+    async def set_project_id(self, addons_path: str, folder: str, project_id: str) -> dict:
+        """Save (or replace) the project ID for an addon that has none in its .toc."""
+        return _set_project_id(addons_path, folder, project_id)
+
+    async def clear_project_id(self, addons_path: str, folder: str) -> dict:
+        return _clear_project_id(addons_path, folder)
+
     async def diagnose_curseforge_app(self) -> dict:
         """Call after prepare_curseforge_app and launching CurseForge."""
         loop = asyncio.get_running_loop()
@@ -403,39 +435,9 @@ class Plugin:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _drive_curseforge_app)
 
-    async def get_addon_settings(self) -> dict:
-        settings = _load_json("settings.json", {})
-        return {"auto_update": bool(settings.get("auto_update", True)), "last_run": dict(_last_run) or None}
-
-    async def set_auto_update(self, enabled: bool) -> dict:
-        settings = _load_json("settings.json", {})
-        settings["auto_update"] = bool(enabled)
-        _save_json("settings.json", settings)
-        return {"auto_update": bool(enabled)}
-
-    async def _auto_loop(self):
-        await asyncio.sleep(AUTO_FIRST_DELAY)
-        while True:
-            delay = AUTO_INTERVAL
-            try:
-                if _load_json("settings.json", {}).get("auto_update", True):
-                    loop = asyncio.get_running_loop()
-                    run = await loop.run_in_executor(None, _run_addon_updates)
-                    if not run["ok"] and "WoW is running" in (run["error"] or ""):
-                        delay = AUTO_RETRY_WHEN_WOW_RUNNING
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                decky.logger.exception("auto update loop failed")
-            await asyncio.sleep(delay)
-
     async def _main(self):
         _restore_pending_dev_mode()
-        self._auto_task = asyncio.create_task(self._auto_loop())
         decky.logger.info(f"WoW Addon Updater loaded ({PROVENANCE})")
 
     async def _unload(self):
-        task = getattr(self, "_auto_task", None)
-        if task:
-            task.cancel()
         decky.logger.info("WoW Addon Updater unloaded")

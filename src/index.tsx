@@ -1,7 +1,7 @@
 // Copyright (c) 2026 ubermoc. All rights reserved. See LICENSE. WoW Addon Updater, https://github.com/ubermoc/Decky-Loader-Wow-mods-update-
 // Provenance: wow-addon-updater/2f44d0b2-b3c2-4726-a93d-480b19a8008e
 import { callable, definePlugin } from "@decky/api";
-import { ButtonItem, DropdownItem, Field, PanelSection, PanelSectionRow, ToggleField } from "@decky/ui";
+import { ButtonItem, DropdownItem, Field, PanelSection, PanelSectionRow, TextField, ToggleField } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
 import { FaCloudDownloadAlt } from "react-icons/fa";
 
@@ -34,34 +34,9 @@ interface InstallResult {
   installed: { version: string | null; build: string | null } | null;
 }
 
-interface AddonRunResult {
-  ok: boolean;
-  error: string | null;
-  finished?: number;
-  results: {
-    label: string;
-    addons_path: string;
-    tracked: number;
-    untracked: number;
-    untracked_names?: string[];
-    current: number;
-    incompatible: number;
-    updated: string[];
-    failed: { addon: string; error: string }[];
-    error: string | null;
-  }[];
-}
-
-interface AddonSettings {
-  auto_update: boolean;
-  last_run: AddonRunResult | null;
-}
-
-// Kept in the bundle on purpose: identifies this plugin's origin.
 const PROVENANCE = "wow-addon-updater/2f44d0b2-b3c2-4726-a93d-480b19a8008e";
 
 const scan = callable<[], ScanResult>("scan");
-const getAddonSettings = callable<[], AddonSettings>("get_addon_settings");
 const prepareApp = callable<[], { ok: boolean; error: string | null }>("prepare_curseforge_app");
 const updateViaApp = callable<[], { ok: boolean; error: string | null; clicked?: boolean; message?: string }>(
   "update_via_curseforge_app",
@@ -72,6 +47,7 @@ interface AddonRow {
   folders: string[];
   version: string;
   installed_file_known: boolean;
+  manual_folder: string | null; // set when the project ID was typed in rather than read from the .toc
 }
 
 interface AddonList {
@@ -96,10 +72,16 @@ const updateAddon = callable<[string, number], { ok: boolean; error: string | nu
 const diagnoseApp = callable<[], { ok: boolean; error: string | null; summary?: string; path?: string }>(
   "diagnose_curseforge_app",
 );
+const checkProjectId = callable<[string, string], { ok: boolean; error: string | null; project_id?: number; latest?: string }>(
+  "check_project_id",
+);
+const setProjectId = callable<[string, string, string], { ok: boolean; error: string | null }>("set_project_id");
+const clearProjectId = callable<[string, string], { ok: boolean; error: string | null; removed?: boolean }>(
+  "clear_project_id",
+);
 const updateAddonViaApp = callable<[string, string], { ok: boolean; error: string | null; message?: string }>(
   "update_addon_through_app",
 );
-const setAutoUpdate = callable<[boolean], { auto_update: boolean }>("set_auto_update");
 const getUpdateInfo = callable<[], UpdateInfo>("get_update_info");
 const installUpdate = callable<[], InstallResult>("install_update");
 
@@ -208,67 +190,18 @@ function InstallList({ installs, updated }: { installs: WowInstall[]; updated: S
   );
 }
 
-function summarizeRun(run: AddonRunResult): string {
-  if (!run.ok) return run.error ?? "Addon update failed.";
-  if (run.results.length === 0) return "No WoW versions to update.";
-  return run.results
-    .map((r) => {
-      if (r.error) return `${r.label}: ${r.error}`;
-      const parts: string[] = [];
-      if (r.updated.length) parts.push(`${r.updated.length} updated (${r.updated.slice(0, 4).join(", ")}${r.updated.length > 4 ? ", ..." : ""})`);
-      if (r.current) parts.push(`${r.current} already current`);
-      if (r.incompatible) parts.push(`${r.incompatible} have no release for this version`);
-      if (r.failed.length) parts.push(`${r.failed.length} failed (${r.failed[0].addon}: ${r.failed[0].error})`);
-      if (r.untracked) parts.push(`${r.untracked} have no CurseForge ID, can't be auto-updated (${(r.untracked_names ?? []).join(", ")}${r.untracked > (r.untracked_names ?? []).length ? ", ..." : ""})`);
-      if (r.tracked === 0) parts.unshift("no CurseForge addons found");
-      return `${r.label}: ${parts.join("; ")}`;
-    })
-    .join("\n");
-}
-
-function AddonUpdates({
+function AppSection({
   curseforge,
   onDone,
 }: {
   curseforge: { app_id: number; launch_options: string };
   onDone: () => void;
 }) {
-  const [settings, setSettings] = useState<AddonSettings | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const s = await getAddonSettings();
-        setSettings(s);
-        if (s.last_run?.finished) {
-          setMessage(`Last automatic run ${relativeAge(s.last_run.finished)}:\n${summarizeRun(s.last_run)}`);
-        }
-      } catch (err) {
-        setMessage(`Could not load addon settings: ${String(err)}`);
-      }
-    })();
-  }, []);
-
   return (
-    <PanelSection title="Addon updates">
-      <PanelSectionRow>
-        <ToggleField
-          label="Update automatically"
-          description="Shortly after Decky starts, then every 6 hours. Waits while WoW is running."
-          checked={settings?.auto_update ?? true}
-          disabled={settings === null}
-          onChange={async (checked: boolean) => {
-            setSettings((s) => (s ? { ...s, auto_update: checked } : s));
-            try {
-              await setAutoUpdate(checked);
-            } catch (err) {
-              setMessage(`Could not save the setting: ${String(err)}`);
-            }
-          }}
-        />
-      </PanelSectionRow>
+    <PanelSection title="CurseForge app">
       <PanelSectionRow>
         <ButtonItem
           layout="below"
@@ -361,6 +294,7 @@ function YourAddons({
   curseforge: { app_id: number; launch_options: string };
   onDone: () => void;
 }) {
+  const [open, setOpen] = useState(false);
   const [viaApp, setViaApp] = useState(false);
   const [selected, setSelected] = useState<string | null>(installs[0]?.addons_path ?? null);
   const [list, setList] = useState<AddonList | null>(null);
@@ -368,6 +302,20 @@ function YourAddons({
   const [checking, setChecking] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+
+  // Project ID editor: which addon folder is being edited, what was typed, what CurseForge said.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [idText, setIdText] = useState("");
+  const [idFound, setIdFound] = useState<string | null>(null); // newest file for the typed ID, once checked
+  const [idError, setIdError] = useState<string | null>(null);
+  const [idBusy, setIdBusy] = useState(false);
+
+  const closeEditor = useCallback(() => {
+    setEditing(null);
+    setIdText("");
+    setIdFound(null);
+    setIdError(null);
+  }, []);
 
   // Keep the selection valid if the list of WoW versions changes after a rescan.
   useEffect(() => {
@@ -395,9 +343,11 @@ function YourAddons({
     }
   }, []);
 
+  // The list is only loaded (and CurseForge only asked) while the Addons row is open.
   useEffect(() => {
-    if (selected) void load(selected);
-  }, [selected, load]);
+    closeEditor();
+    if (open && selected) void load(selected);
+  }, [open, selected, load, closeEditor]);
 
   const updateOne = useCallback(
     async (row: AddonRow) => {
@@ -449,7 +399,118 @@ function YourAddons({
     [selected, curseforge, load, onDone],
   );
 
+  const checkId = useCallback(async () => {
+    if (!selected) return;
+    setIdBusy(true);
+    setIdFound(null);
+    setIdError(null);
+    try {
+      const r = await checkProjectId(selected, idText);
+      if (r.ok) setIdFound(r.latest ?? "a release");
+      else setIdError(r.error ?? "Couldn't check that ID.");
+    } catch (err) {
+      setIdError(String(err));
+    } finally {
+      setIdBusy(false);
+    }
+  }, [selected, idText]);
+
+  const saveId = useCallback(
+    async (folder: string) => {
+      if (!selected) return;
+      setIdBusy(true);
+      try {
+        const r = await setProjectId(selected, folder, idText);
+        if (!r.ok) {
+          setIdError(r.error ?? "Couldn't save that ID.");
+          return;
+        }
+        closeEditor();
+        setMessage(`Saved. ${folder} now updates like the other addons.`);
+        await load(selected);
+      } catch (err) {
+        setIdError(String(err));
+      } finally {
+        setIdBusy(false);
+      }
+    },
+    [selected, idText, closeEditor, load],
+  );
+
+  const removeId = useCallback(
+    async (folder: string) => {
+      if (!selected) return;
+      setIdBusy(true);
+      try {
+        const r = await clearProjectId(selected, folder);
+        closeEditor();
+        setMessage(r.ok ? `Removed the project ID for ${folder}.` : (r.error ?? "Couldn't remove it."));
+        await load(selected);
+      } catch (err) {
+        setIdError(String(err));
+      } finally {
+        setIdBusy(false);
+      }
+    },
+    [selected, closeEditor, load],
+  );
+
+  // The editor shown under an addon: type the number, check it, confirm it, or remove / cancel.
+  const renderEditor = (folder: string, hasSaved: boolean) => (
+    <>
+      <PanelSectionRow>
+        <TextField
+          label="CurseForge project ID"
+          description="The number under 'Project ID' on the addon's CurseForge page."
+          mustBeNumeric
+          value={idText}
+          disabled={idBusy}
+          onChange={(e) => {
+            setIdText(e.target.value);
+            setIdFound(null);
+            setIdError(null);
+          }}
+        />
+      </PanelSectionRow>
+      {idError && (
+        <PanelSectionRow>
+          <Field focusable label={idError} bottomSeparator="none" />
+        </PanelSectionRow>
+      )}
+      {idFound && (
+        <PanelSectionRow>
+          <Field focusable label={`CurseForge has: ${idFound}`} description="Is this the right addon?" bottomSeparator="none" />
+        </PanelSectionRow>
+      )}
+      <PanelSectionRow>
+        {idFound ? (
+          <ButtonItem layout="below" disabled={idBusy} onClick={() => saveId(folder)}>
+            Yes, save this ID
+          </ButtonItem>
+        ) : (
+          <ButtonItem layout="below" disabled={idBusy || idText.trim() === ""} onClick={checkId}>
+            {idBusy ? "Checking..." : "Check ID"}
+          </ButtonItem>
+        )}
+      </PanelSectionRow>
+      {hasSaved && (
+        <PanelSectionRow>
+          <ButtonItem layout="below" disabled={idBusy} onClick={() => removeId(folder)}>
+            Remove the saved ID
+          </ButtonItem>
+        </PanelSectionRow>
+      )}
+      <PanelSectionRow>
+        <ButtonItem layout="below" disabled={idBusy} onClick={closeEditor}>
+          Cancel
+        </ButtonItem>
+      </PanelSectionRow>
+    </>
+  );
+
   if (installs.length === 0) return null;
+
+  const total = list?.ok ? list.addons.length + list.untracked.length : null;
 
   return (
     <PanelSection title="Your addons">
@@ -462,81 +523,132 @@ function YourAddons({
         />
       </PanelSectionRow>
       <PanelSectionRow>
-        <ToggleField
-          label="Use the CurseForge app (slow)"
-          description="Opens CurseForge for each update and presses its own Update button. Also works for addons without a CurseForge ID. Uses the WoW version CurseForge has selected."
-          checked={viaApp}
-          onChange={setViaApp}
-        />
-      </PanelSectionRow>
-      {list === null && !message && (
-        <PanelSectionRow>
-          <Field label="Loading addons..." bottomSeparator="none" />
-        </PanelSectionRow>
-      )}
-      {list && !list.ok && (
-        <PanelSectionRow>
-          <Field focusable label={list.error ?? "Couldn't list addons."} bottomSeparator="none" />
-        </PanelSectionRow>
-      )}
-      {list?.ok && list.addons.length === 0 && (
-        <PanelSectionRow>
-          <Field focusable label="No CurseForge addons found in this version" bottomSeparator="none" />
-        </PanelSectionRow>
-      )}
-      {list?.ok &&
-        list.addons.map((row) => {
-          const check = checks[String(row.project_id)];
-          const hasUpdate = check?.status === "update";
-          return (
-            <PanelSectionRow key={row.project_id}>
-              <ButtonItem
-                layout="below"
-                disabled={busyId !== null || (!viaApp && check?.status === "incompatible")}
-                description={describeCheck(row, check, checking)}
-                onClick={() => (viaApp ? updateThroughApp(row.folders[0], row.name) : updateOne(row))}
-              >
-                {busyId === row.project_id || (busyId === -1 && viaApp)
-                  ? "Working..."
-                  : viaApp
-                    ? `Update ${row.name} through CurseForge`
-                    : `${hasUpdate ? "Update" : "Reinstall"} ${row.name}`}
-              </ButtonItem>
-            </PanelSectionRow>
-          );
-        })}
-      {list?.ok &&
-        list.untracked.map((name) => (
-          <PanelSectionRow key={`untracked-${name}`}>
-            {viaApp ? (
-              <ButtonItem
-                layout="below"
-                disabled={busyId !== null}
-                description="No CurseForge ID in its .toc; updated using CurseForge's own record of it."
-                onClick={() => updateThroughApp(name, name)}
-              >
-                {busyId === -1 ? "Working..." : `Update ${name} through CurseForge`}
-              </ButtonItem>
-            ) : (
-              <Field
-                focusable
-                label={name}
-                description="No CurseForge ID in its .toc, so it can't be updated directly. Add a ## X-Curse-Project-ID line, or turn on 'Use the CurseForge app'."
-                bottomSeparator="none"
-              />
-            )}
-          </PanelSectionRow>
-        ))}
-      {message && (
-        <PanelSectionRow>
-          <Field focusable label={<div style={{ whiteSpace: "pre-wrap" }}>{message}</div>} bottomSeparator="none" />
-        </PanelSectionRow>
-      )}
-      <PanelSectionRow>
-        <ButtonItem layout="below" disabled={busyId !== null || checking || !selected} onClick={() => selected && load(selected)}>
-          {checking ? "Checking..." : "Check for addon updates"}
+        <ButtonItem
+          layout="below"
+          description={open ? "Press to collapse" : "Press to list the addons in this version"}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {`${open ? "\u25BE" : "\u25B8"} Addons${open && total !== null ? ` (${total})` : ""}`}
         </ButtonItem>
       </PanelSectionRow>
+      {open && (
+        <>
+          <PanelSectionRow>
+            <ToggleField
+              label="Use the CurseForge app (slow)"
+              description="Opens CurseForge for each update and presses its own Update button. Uses the WoW version CurseForge has selected."
+              checked={viaApp}
+              onChange={setViaApp}
+            />
+          </PanelSectionRow>
+          {list === null && !message && (
+            <PanelSectionRow>
+              <Field label="Loading addons..." bottomSeparator="none" />
+            </PanelSectionRow>
+          )}
+          {list && !list.ok && (
+            <PanelSectionRow>
+              <Field focusable label={list.error ?? "Couldn't list addons."} bottomSeparator="none" />
+            </PanelSectionRow>
+          )}
+          {list?.ok && total === 0 && (
+            <PanelSectionRow>
+              <Field focusable label="No addons found in this version" bottomSeparator="none" />
+            </PanelSectionRow>
+          )}
+          {list?.ok &&
+            list.addons.map((row) => {
+              const check = checks[String(row.project_id)];
+              const hasUpdate = check?.status === "update";
+              return (
+                <div key={row.project_id}>
+                  <PanelSectionRow>
+                    <ButtonItem
+                      layout="below"
+                      disabled={busyId !== null || (!viaApp && check?.status === "incompatible")}
+                      description={describeCheck(row, check, checking)}
+                      onClick={() => (viaApp ? updateThroughApp(row.folders[0], row.name) : updateOne(row))}
+                    >
+                      {busyId === row.project_id || (busyId === -1 && viaApp)
+                        ? "Working..."
+                        : viaApp
+                          ? `Update ${row.name} through CurseForge`
+                          : `${hasUpdate ? "Update" : "Reinstall"} ${row.name}`}
+                    </ButtonItem>
+                  </PanelSectionRow>
+                  {row.manual_folder &&
+                    (editing === row.manual_folder ? (
+                      renderEditor(row.manual_folder, true)
+                    ) : (
+                      <PanelSectionRow>
+                        <ButtonItem
+                          layout="below"
+                          disabled={busyId !== null || editing !== null}
+                          description={`Project ID ${row.project_id} (typed in)`}
+                          onClick={() => {
+                            closeEditor();
+                            setEditing(row.manual_folder);
+                          }}
+                        >
+                          {`Change or remove the project ID for ${row.name}`}
+                        </ButtonItem>
+                      </PanelSectionRow>
+                    ))}
+                </div>
+              );
+            })}
+          {list?.ok &&
+            list.untracked.map((name) => (
+              <div key={`untracked-${name}`}>
+                {editing === name ? (
+                  renderEditor(name, false)
+                ) : (
+                  <>
+                    <PanelSectionRow>
+                      <ButtonItem
+                        layout="below"
+                        disabled={busyId !== null || editing !== null}
+                        description="No CurseForge ID in its files, so it can't be updated yet. Press to enter its project ID."
+                        onClick={() => {
+                          closeEditor();
+                          setEditing(name);
+                        }}
+                      >
+                        {`Add a project ID for ${name}`}
+                      </ButtonItem>
+                    </PanelSectionRow>
+                    {viaApp && (
+                      <PanelSectionRow>
+                        <ButtonItem
+                          layout="below"
+                          disabled={busyId !== null || editing !== null}
+                          description="Uses CurseForge's own record of it, no ID needed."
+                          onClick={() => updateThroughApp(name, name)}
+                        >
+                          {busyId === -1 ? "Working..." : `Update ${name} through CurseForge`}
+                        </ButtonItem>
+                      </PanelSectionRow>
+                    )}
+                  </>
+                )}
+              </div>
+            ))}
+          {message && (
+            <PanelSectionRow>
+              <Field focusable label={<div style={{ whiteSpace: "pre-wrap" }}>{message}</div>} bottomSeparator="none" />
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              disabled={busyId !== null || checking || !selected || editing !== null}
+              onClick={() => selected && load(selected)}
+            >
+              {checking ? "Checking..." : "Check for addon updates"}
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
+      )}
     </PanelSection>
   );
 }
@@ -710,7 +822,7 @@ function MainContent() {
     <>
       <InstallList installs={result.installs} updated={updated} />
       <YourAddons installs={result.installs} curseforge={result.curseforge} onDone={refresh} />
-      <AddonUpdates curseforge={result.curseforge} onDone={refresh} />
+      <AppSection curseforge={result.curseforge} onDone={refresh} />
       <PanelSection>
         <PanelSectionRow>
           <ButtonItem

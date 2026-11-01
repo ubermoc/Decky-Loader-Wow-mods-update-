@@ -142,6 +142,7 @@ class TrackedAddon:
     project_id: int
     folders: list[str]
     versions: list[str]  # `## Version:` values from the installed .toc files
+    manual_folders: Optional[list[str]] = None  # folders whose project id was typed in, not read from the .toc
 
 
 @dataclass
@@ -150,8 +151,12 @@ class Discovery:
     untracked: list[str]  # folders without a CurseForge id (hand-installed, Blizzard_*, ...)
 
 
-def discover(addons_dir: Path) -> Discovery:
-    """Group the AddOns folders by their CurseForge project id."""
+def discover(addons_dir: Path, manual_ids: Optional[dict[str, int]] = None) -> Discovery:
+    """Group the AddOns folders by their CurseForge project id.
+
+    manual_ids maps a folder name to a project id the user typed in. It only applies to folders
+    whose .toc has no id of its own; such an addon is then treated like any other.
+    """
     grouped: dict[int, TrackedAddon] = {}
     untracked: list[str] = []
     try:
@@ -174,10 +179,15 @@ def discover(addons_dir: Path) -> Discovery:
                     versions.append(version.group(1))
         except OSError:
             continue
+        manual = False
+        if project_id is None and manual_ids and entry.name in manual_ids:
+            project_id, manual = manual_ids[entry.name], True
         if project_id is None:
             untracked.append(entry.name)
             continue
         addon = grouped.setdefault(project_id, TrackedAddon(project_id, [], []))
+        if manual:
+            addon.manual_folders = (addon.manual_folders or []) + [entry.name]
         addon.folders.append(entry.name)
         addon.versions.extend(versions)
     return Discovery(list(grouped.values()), untracked)
@@ -436,50 +446,3 @@ def update_addon(
         return {"status": "failed", "latest": None, "error": str(exc)}
     except Exception as exc:  # one broken addon must not stop the rest
         return {"status": "failed", "latest": None, "error": f"Unexpected error: {exc}"}
-
-
-def update_install(
-    flavor: str,
-    wow_root: Path,
-    addons_dir: Path,
-    client: Any,
-    state: dict[str, int],
-) -> dict[str, Any]:
-    """Update every CurseForge addon in one AddOns folder.
-
-    `state` maps project id (as str) -> the CurseForge file id this plugin last installed; it is
-    updated in place and the caller persists it.
-    """
-    result: dict[str, Any] = {
-        "flavor": flavor,
-        "tracked": 0,
-        "untracked": 0,
-        "untracked_names": [],
-        "updated": [],
-        "current": 0,
-        "incompatible": 0,  # tracked, but CurseForge has no release for this WoW version
-        "failed": [],
-        "error": None,
-    }
-    target = target_for(flavor, wow_root)
-    if target is None:
-        result["error"] = f"Can't tell which WoW version {flavor} is (no .build.info), so it was skipped."
-        return result
-
-    found = discover(addons_dir)
-    result["tracked"] = len(found.tracked)
-    untracked = [n for n in found.untracked if not n.startswith("Blizzard_")]
-    result["untracked"] = len(untracked)
-    result["untracked_names"] = untracked[:10]
-    for addon in found.tracked:
-        label = addon.folders[0]
-        outcome = update_addon(addon, target, addons_dir, client, state)
-        if outcome["status"] == "updated":
-            result["updated"].append(label)
-        elif outcome["status"] == "current":
-            result["current"] += 1
-        elif outcome["status"] == "incompatible":
-            result["incompatible"] += 1
-        else:
-            result["failed"].append({"addon": label, "error": outcome["error"]})
-    return result
