@@ -1,7 +1,7 @@
 // Copyright (c) 2026 ubermoc. All rights reserved. See LICENSE. WoW Addon Updater, https://github.com/ubermoc/Decky-Loader-Wow-mods-update-
 // Provenance: wow-addon-updater/2f44d0b2-b3c2-4726-a93d-480b19a8008e
 import { callable, definePlugin } from "@decky/api";
-import { ButtonItem, Field, PanelSection, PanelSectionRow, ToggleField } from "@decky/ui";
+import { ButtonItem, DropdownItem, Field, PanelSection, PanelSectionRow, ToggleField } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
 import { FaCloudDownloadAlt } from "react-icons/fa";
 
@@ -67,6 +67,33 @@ const prepareApp = callable<[], { ok: boolean; error: string | null }>("prepare_
 const updateViaApp = callable<[], { ok: boolean; error: string | null; clicked?: boolean; message?: string }>(
   "update_via_curseforge_app",
 );
+interface AddonRow {
+  project_id: number;
+  name: string;
+  folders: string[];
+  version: string;
+  installed_file_known: boolean;
+}
+
+interface AddonList {
+  ok: boolean;
+  error: string | null;
+  label?: string;
+  addons: AddonRow[];
+  untracked: string[];
+}
+
+interface AddonCheck {
+  status: "update" | "current" | "incompatible" | "error";
+  latest: string | null;
+  error: string | null;
+}
+
+const listAddons = callable<[string], AddonList>("list_addons");
+const checkAddons = callable<[string], { ok: boolean; error: string | null; results: Record<string, AddonCheck> }>(
+  "check_addons",
+);
+const updateAddon = callable<[string, number], { ok: boolean; error: string | null; latest?: string }>("update_addon");
 const setAutoUpdate = callable<[boolean], { auto_update: boolean }>("set_auto_update");
 const getUpdateInfo = callable<[], UpdateInfo>("get_update_info");
 const installUpdate = callable<[], InstallResult>("install_update");
@@ -308,6 +335,152 @@ function AddonUpdates({
   );
 }
 
+function describeCheck(row: AddonRow, check: AddonCheck | undefined, checking: boolean): string {
+  const installed = row.version ? `Installed ${row.version}` : "Installed";
+  if (checking && !check) return `${installed} - checking CurseForge...`;
+  if (!check) return installed;
+  switch (check.status) {
+    case "update":
+      return `${installed} - update available${check.latest ? `: ${check.latest}` : ""}`;
+    case "current":
+      return `${installed} - up to date${check.latest ? ` (${check.latest})` : ""}`;
+    case "incompatible":
+      return `${installed} - CurseForge has no release for this WoW version`;
+    default:
+      return `${installed} - couldn't check: ${check.error ?? "unknown error"}`;
+  }
+}
+
+function YourAddons({ installs, onDone }: { installs: WowInstall[]; onDone: () => void }) {
+  const [selected, setSelected] = useState<string | null>(installs[0]?.addons_path ?? null);
+  const [list, setList] = useState<AddonList | null>(null);
+  const [checks, setChecks] = useState<Record<string, AddonCheck>>({});
+  const [checking, setChecking] = useState(false);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  // Keep the selection valid if the list of WoW versions changes after a rescan.
+  useEffect(() => {
+    if (!installs.some((i) => i.addons_path === selected)) setSelected(installs[0]?.addons_path ?? null);
+  }, [installs, selected]);
+
+  const load = useCallback(async (path: string) => {
+    setList(null);
+    setChecks({});
+    setMessage(null);
+    try {
+      const l = await listAddons(path);
+      setList(l);
+      if (!l.ok) return;
+      setChecking(true);
+      try {
+        const c = await checkAddons(path);
+        if (c.ok) setChecks(c.results);
+        else setMessage(c.error ?? "Couldn't check for updates.");
+      } finally {
+        setChecking(false);
+      }
+    } catch (err) {
+      setMessage(`Couldn't load addons: ${String(err)}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selected) void load(selected);
+  }, [selected, load]);
+
+  const updateOne = useCallback(
+    async (row: AddonRow) => {
+      if (!selected) return;
+      setBusyId(row.project_id);
+      setMessage(`Updating ${row.name}...`);
+      try {
+        const r = await updateAddon(selected, row.project_id);
+        if (r.ok) {
+          setMessage(`${row.name} updated${r.latest ? ` to ${r.latest}` : ""}.`);
+          onDone();
+          await load(selected);
+          return;
+        }
+        setMessage(`${row.name}: ${r.error ?? "update failed"}`);
+      } catch (err) {
+        setMessage(`${row.name}: ${String(err)}`);
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [selected, load, onDone],
+  );
+
+  if (installs.length === 0) return null;
+
+  return (
+    <PanelSection title="Your addons">
+      <PanelSectionRow>
+        <DropdownItem
+          label="WoW version"
+          rgOptions={installs.map((i) => ({ data: i.addons_path, label: i.label }))}
+          selectedOption={selected}
+          onChange={(option) => setSelected(option.data as string)}
+        />
+      </PanelSectionRow>
+      {list === null && !message && (
+        <PanelSectionRow>
+          <Field label="Loading addons..." bottomSeparator="none" />
+        </PanelSectionRow>
+      )}
+      {list && !list.ok && (
+        <PanelSectionRow>
+          <Field focusable label={list.error ?? "Couldn't list addons."} bottomSeparator="none" />
+        </PanelSectionRow>
+      )}
+      {list?.ok && list.addons.length === 0 && (
+        <PanelSectionRow>
+          <Field focusable label="No CurseForge addons found in this version" bottomSeparator="none" />
+        </PanelSectionRow>
+      )}
+      {list?.ok &&
+        list.addons.map((row) => {
+          const check = checks[String(row.project_id)];
+          const hasUpdate = check?.status === "update";
+          return (
+            <PanelSectionRow key={row.project_id}>
+              <ButtonItem
+                layout="below"
+                disabled={busyId !== null || check?.status === "incompatible"}
+                description={describeCheck(row, check, checking)}
+                onClick={() => updateOne(row)}
+              >
+                {busyId === row.project_id ? "Updating..." : `${hasUpdate ? "Update" : "Reinstall"} ${row.name}`}
+              </ButtonItem>
+            </PanelSectionRow>
+          );
+        })}
+      {list?.ok &&
+        list.untracked.map((name) => (
+          <PanelSectionRow key={`untracked-${name}`}>
+            <Field
+              focusable
+              label={name}
+              description="No CurseForge ID in its .toc, so it can't be updated here. Add a ## X-Curse-Project-ID line to enable it."
+              bottomSeparator="none"
+            />
+          </PanelSectionRow>
+        ))}
+      {message && (
+        <PanelSectionRow>
+          <Field focusable label={<div style={{ whiteSpace: "pre-wrap" }}>{message}</div>} bottomSeparator="none" />
+        </PanelSectionRow>
+      )}
+      <PanelSectionRow>
+        <ButtonItem layout="below" disabled={busyId !== null || checking || !selected} onClick={() => selected && load(selected)}>
+          {checking ? "Checking..." : "Check for addon updates"}
+        </ButtonItem>
+      </PanelSectionRow>
+    </PanelSection>
+  );
+}
+
 function UpdatesSection() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [busy, setBusy] = useState(false);
@@ -476,6 +649,7 @@ function MainContent() {
   return (
     <>
       <InstallList installs={result.installs} updated={updated} />
+      <YourAddons installs={result.installs} onDone={refresh} />
       <AddonUpdates installs={result.installs} curseforge={result.curseforge} onDone={refresh} />
       <PanelSection>
         <PanelSectionRow>

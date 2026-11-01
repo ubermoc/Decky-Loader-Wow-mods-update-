@@ -157,6 +157,88 @@ def _drive_curseforge_app() -> dict:
     return {"ok": True, "error": None, "clicked": result["clicked"], "message": result["message"]}
 
 
+def _install_for(addons_path: str):
+    """Only paths the scan itself found are accepted, never an arbitrary path from the UI."""
+    for install in find_installs(_home()):
+        if install.addons_path == addons_path and Path(install.addons_path).is_dir():
+            return install
+    return None
+
+
+def _list_addons(addons_path: str) -> dict:
+    install = _install_for(addons_path)
+    if install is None:
+        return {"ok": False, "error": "That WoW version wasn't found any more. Press Rescan.", "addons": [], "untracked": []}
+    found = addons.discover(Path(install.addons_path))
+    state = _load_json("state.json", {}).get(install.addons_path, {})
+    rows = []
+    for addon in found.tracked:
+        rows.append(
+            {
+                "project_id": addon.project_id,
+                "name": addon.folders[0],
+                "folders": addon.folders,
+                "version": addons._version_token(addon.versions[0]) if addon.versions else "",
+                "installed_file_known": str(addon.project_id) in state,
+            }
+        )
+    return {
+        "ok": True,
+        "error": None,
+        "label": install.label,
+        "addons": rows,
+        "untracked": [n for n in found.untracked if not n.startswith("Blizzard_")],
+    }
+
+
+def _check_addons(addons_path: str) -> dict:
+    install = _install_for(addons_path)
+    if install is None:
+        return {"ok": False, "error": "That WoW version wasn't found any more. Press Rescan.", "results": {}}
+    target = addons.target_for(install.flavor, Path(install.root))
+    if target is None:
+        return {"ok": False, "error": f"Can't tell which WoW version {install.flavor} is.", "results": {}}
+    state = _load_json("state.json", {}).get(install.addons_path, {})
+    client = addons.CurseForgeClient()
+    results = {}
+    for addon in addons.discover(Path(install.addons_path)).tracked:
+        results[str(addon.project_id)] = addons.check_addon(addon, target, client, state)
+    return {"ok": True, "error": None, "results": results}
+
+
+def _update_one_addon(addons_path: str, project_id: int) -> dict:
+    if not _run_lock.acquire(blocking=False):
+        return {"ok": False, "error": "An addon update is already running."}
+    try:
+        if addons.wow_running():
+            return {"ok": False, "error": "WoW is running. Close it first so addons aren't swapped under it."}
+        install = _install_for(addons_path)
+        if install is None:
+            return {"ok": False, "error": "That WoW version wasn't found any more. Press Rescan."}
+        target = addons.target_for(install.flavor, Path(install.root))
+        if target is None:
+            return {"ok": False, "error": f"Can't tell which WoW version {install.flavor} is."}
+        addons_dir = Path(install.addons_path)
+        addon = next((a for a in addons.discover(addons_dir).tracked if a.project_id == int(project_id)), None)
+        if addon is None:
+            return {"ok": False, "error": "That addon has no CurseForge ID, so it can't be updated here."}
+        state = _load_json("state.json", {})
+        per_install = state.setdefault(install.addons_path, {})
+        outcome = addons.update_addon(addon, target, addons_dir, addons.CurseForgeClient(), per_install, force=True)
+        _save_json("state.json", state)
+        decky.logger.info(f"update {addon.folders[0]} ({install.flavor}): {outcome}")
+        if outcome["status"] == "failed":
+            return {"ok": False, "error": outcome["error"]}
+        if outcome["status"] == "incompatible":
+            return {"ok": False, "error": f"CurseForge has no release of {addon.folders[0]} for {install.label}."}
+        return {"ok": True, "error": None, "latest": outcome["latest"]}
+    except Exception as exc:
+        decky.logger.exception("single addon update crashed")
+        return {"ok": False, "error": f"Unexpected error: {exc}"}
+    finally:
+        _run_lock.release()
+
+
 class Plugin:
     async def scan(self) -> dict:
         """Read-only snapshot: is CurseForge in Steam, and which WoW versions exist."""
@@ -237,6 +319,21 @@ class Plugin:
         """Update CurseForge addons now: all WoW versions, or just one AddOns folder."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _run_addon_updates, addons_path)
+
+    async def list_addons(self, addons_path: str) -> dict:
+        """Addons in one WoW version's AddOns folder (local only, fast)."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _list_addons, addons_path)
+
+    async def check_addons(self, addons_path: str) -> dict:
+        """Ask CurseForge what the newest release of each addon is (network, a few seconds)."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _check_addons, addons_path)
+
+    async def update_addon(self, addons_path: str, project_id: int) -> dict:
+        """Install the newest release of ONE addon."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _update_one_addon, addons_path, project_id)
 
     async def prepare_curseforge_app(self) -> dict:
         """Call before launching CurseForge for update_via_curseforge_app."""

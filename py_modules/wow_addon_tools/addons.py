@@ -373,6 +373,51 @@ def wow_running(proc: Path = Path("/proc")) -> bool:
     return False
 
 
+def check_addon(addon: TrackedAddon, target: FlavorTarget, client: Any, state: dict[str, int]) -> dict[str, Any]:
+    """Look up the newest release without installing: status is update | current | incompatible | error."""
+    try:
+        file = newest_file(client, addon.project_id, target)
+    except AddonError as exc:
+        return {"status": "error", "latest": None, "error": str(exc)}
+    if file is None:
+        return {"status": "incompatible", "latest": None, "error": None}
+    status = "update" if needs_update(addon, file, state.get(str(addon.project_id))) else "current"
+    return {"status": status, "latest": file.get("fileName") or file.get("displayName"), "error": None}
+
+
+def update_addon(
+    addon: TrackedAddon,
+    target: FlavorTarget,
+    addons_dir: Path,
+    client: Any,
+    state: dict[str, int],
+    force: bool = False,
+) -> dict[str, Any]:
+    """Install the newest release of one addon. status: updated | current | incompatible | failed.
+
+    force=True installs it even if it looks current (used by the per-addon button).
+    """
+    key = str(addon.project_id)
+    try:
+        file = newest_file(client, addon.project_id, target)
+        if file is None:
+            return {"status": "incompatible", "latest": None, "error": None}
+        latest = file.get("fileName") or file.get("displayName")
+        if not force and not needs_update(addon, file, state.get(key)):
+            state[key] = file["id"]
+            return {"status": "current", "latest": latest, "error": None}
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / "addon.zip"
+            client.download(addon.project_id, file["id"], zip_path)
+            install_zip(zip_path, addons_dir)
+        state[key] = file["id"]
+        return {"status": "updated", "latest": latest, "error": None}
+    except AddonError as exc:
+        return {"status": "failed", "latest": None, "error": str(exc)}
+    except Exception as exc:  # one broken addon must not stop the rest
+        return {"status": "failed", "latest": None, "error": f"Unexpected error: {exc}"}
+
+
 def update_install(
     flavor: str,
     wow_root: Path,
@@ -407,25 +452,14 @@ def update_install(
     result["untracked"] = len(untracked)
     result["untracked_names"] = untracked[:10]
     for addon in found.tracked:
-        key = str(addon.project_id)
         label = addon.folders[0]
-        try:
-            file = newest_file(client, addon.project_id, target)
-            if file is None:
-                result["incompatible"] += 1
-                continue
-            if not needs_update(addon, file, state.get(key)):
-                state[key] = file["id"]
-                result["current"] += 1
-                continue
-            with tempfile.TemporaryDirectory() as tmp:
-                zip_path = Path(tmp) / "addon.zip"
-                client.download(addon.project_id, file["id"], zip_path)
-                install_zip(zip_path, addons_dir)
-            state[key] = file["id"]
+        outcome = update_addon(addon, target, addons_dir, client, state)
+        if outcome["status"] == "updated":
             result["updated"].append(label)
-        except AddonError as exc:
-            result["failed"].append({"addon": label, "error": str(exc)})
-        except Exception as exc:  # one broken addon must not stop the rest
-            result["failed"].append({"addon": label, "error": f"Unexpected error: {exc}"})
+        elif outcome["status"] == "current":
+            result["current"] += 1
+        elif outcome["status"] == "incompatible":
+            result["incompatible"] += 1
+        else:
+            result["failed"].append({"addon": label, "error": outcome["error"]})
     return result

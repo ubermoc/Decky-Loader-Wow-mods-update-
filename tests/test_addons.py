@@ -313,6 +313,66 @@ class UpdateInstallTests(unittest.TestCase):
             self.assertEqual(res["updated"], [])
 
 
+class SingleAddonTests(unittest.TestCase):
+    def setup(self, tmp):
+        root = Path(tmp) / "World of Warcraft"
+        d = root / "_retail_" / "Interface" / "AddOns"
+        d.mkdir(parents=True)
+        return d
+
+    def addon(self, d):
+        make_addon(d, "Foo", 1, version="1.0.0")
+        return addons.discover(d).tracked[0]
+
+    def test_check_reports_update_current_incompatible_and_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self.setup(tmp)
+            a = self.addon(d)
+            target = addons.FlavorTarget(type_id=517)
+            newer = dict(cf_file(2), fileName="Foo-2.0.0.zip")
+            current = dict(cf_file(3), fileName="Foo-1.0.0.zip")
+            self.assertEqual(addons.check_addon(a, target, FakeClient({1: [newer]}, {}), {})["status"], "update")
+            self.assertEqual(addons.check_addon(a, target, FakeClient({1: [current]}, {}), {})["status"], "current")
+            self.assertEqual(addons.check_addon(a, target, FakeClient({1: [cf_file(4, types=(67408,))]}, {}), {})["status"], "incompatible")
+
+            class Broken:
+                def files_page(self, *_):
+                    raise addons.AddonError("network down")
+
+            res = addons.check_addon(a, target, Broken(), {})
+            self.assertEqual((res["status"], res["error"]), ("error", "network down"))
+
+    def test_check_never_installs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self.setup(tmp)
+            a = self.addon(d)
+            client = FakeClient({1: [dict(cf_file(2), fileName="Foo-2.0.0.zip")]}, {})
+            addons.check_addon(a, addons.FlavorTarget(type_id=517), client, {})
+            self.assertEqual(client.downloaded, [])
+
+    def test_force_reinstalls_even_when_current(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self.setup(tmp)
+            a = self.addon(d)
+            current = dict(cf_file(3), fileName="Foo-1.0.0.zip")
+            client = FakeClient({1: [current]}, {3: {"Foo/Foo.toc": "## X-Curse-Project-ID: 1\n", "Foo/new.lua": "x"}})
+            target = addons.FlavorTarget(type_id=517)
+            self.assertEqual(addons.update_addon(a, target, d, client, {})["status"], "current")
+            self.assertEqual(client.downloaded, [])
+            res = addons.update_addon(a, target, d, client, {}, force=True)
+            self.assertEqual(res["status"], "updated")
+            self.assertTrue((d / "Foo" / "new.lua").exists())
+
+    def test_failed_update_reports_the_error_and_leaves_the_addon(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = self.setup(tmp)
+            a = self.addon(d)
+            client = FakeClient({1: [cf_file(2)]}, {2: {"../escape": "x"}})
+            res = addons.update_addon(a, addons.FlavorTarget(type_id=517), d, client, {})
+            self.assertEqual(res["status"], "failed")
+            self.assertTrue((d / "Foo" / "Foo.toc").exists())
+
+
 class WowRunningTests(unittest.TestCase):
     def test_detects_wow_process(self):
         with tempfile.TemporaryDirectory() as tmp:
