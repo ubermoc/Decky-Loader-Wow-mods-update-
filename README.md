@@ -1,1 +1,0 @@
-# Decky-Loader-Wow-mods-update-
