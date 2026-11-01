@@ -305,6 +305,7 @@ function YourAddons({
 
   // Project ID editor: which addon folder is being edited, what was typed, what CurseForge said.
   const [editing, setEditing] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState<"change" | "remove">("change");
   const [idText, setIdText] = useState("");
   const [idFound, setIdFound] = useState<string | null>(null); // newest file for the typed ID, once checked
   const [idError, setIdError] = useState<string | null>(null);
@@ -312,6 +313,7 @@ function YourAddons({
 
   const closeEditor = useCallback(() => {
     setEditing(null);
+    setEditMode("change");
     setIdText("");
     setIdFound(null);
     setIdError(null);
@@ -455,58 +457,74 @@ function YourAddons({
     [selected, closeEditor, load],
   );
 
-  // The editor shown under an addon: type the number, check it, confirm it, or remove / cancel.
-  const renderEditor = (folder: string, hasSaved: boolean) => (
-    <>
-      <PanelSectionRow>
-        <TextField
-          label="CurseForge project ID"
-          description="The number under 'Project ID' on the addon's CurseForge page."
-          mustBeNumeric
-          value={idText}
-          disabled={idBusy}
-          onChange={(e) => {
-            setIdText(e.target.value);
-            setIdFound(null);
-            setIdError(null);
-          }}
-        />
-      </PanelSectionRow>
-      {idError && (
+  // The editor shown under an addon. "change": type the number, check it, confirm it.
+  // "remove": a one-step confirmation, so a stray press can't delete an ID.
+  const renderEditor = (folder: string, mode: "change" | "remove") =>
+    mode === "remove" ? (
+      <>
         <PanelSectionRow>
-          <Field focusable label={idError} bottomSeparator="none" />
+          <Field
+            focusable
+            label={`Remove the project ID for ${folder}?`}
+            description="It goes back to having no project ID. Your addon files aren't touched."
+            bottomSeparator="none"
+          />
         </PanelSectionRow>
-      )}
-      {idFound && (
-        <PanelSectionRow>
-          <Field focusable label={`CurseForge has: ${idFound}`} description="Is this the right addon?" bottomSeparator="none" />
-        </PanelSectionRow>
-      )}
-      <PanelSectionRow>
-        {idFound ? (
-          <ButtonItem layout="below" disabled={idBusy} onClick={() => saveId(folder)}>
-            Yes, save this ID
-          </ButtonItem>
-        ) : (
-          <ButtonItem layout="below" disabled={idBusy || idText.trim() === ""} onClick={checkId}>
-            {idBusy ? "Checking..." : "Check ID"}
-          </ButtonItem>
-        )}
-      </PanelSectionRow>
-      {hasSaved && (
         <PanelSectionRow>
           <ButtonItem layout="below" disabled={idBusy} onClick={() => removeId(folder)}>
-            Remove the saved ID
+            Yes, remove it
           </ButtonItem>
         </PanelSectionRow>
-      )}
-      <PanelSectionRow>
-        <ButtonItem layout="below" disabled={idBusy} onClick={closeEditor}>
-          Cancel
-        </ButtonItem>
-      </PanelSectionRow>
-    </>
-  );
+        <PanelSectionRow>
+          <ButtonItem layout="below" disabled={idBusy} onClick={closeEditor}>
+            Cancel
+          </ButtonItem>
+        </PanelSectionRow>
+      </>
+    ) : (
+      <>
+        <PanelSectionRow>
+          <TextField
+            label="CurseForge project ID"
+            description="The number under 'Project ID' on the addon's CurseForge page."
+            mustBeNumeric
+            value={idText}
+            disabled={idBusy}
+            onChange={(e) => {
+              setIdText(e.target.value);
+              setIdFound(null);
+              setIdError(null);
+            }}
+          />
+        </PanelSectionRow>
+        {idError && (
+          <PanelSectionRow>
+            <Field focusable label={idError} bottomSeparator="none" />
+          </PanelSectionRow>
+        )}
+        {idFound && (
+          <PanelSectionRow>
+            <Field focusable label={`CurseForge has: ${idFound}`} description="Is this the right addon?" bottomSeparator="none" />
+          </PanelSectionRow>
+        )}
+        <PanelSectionRow>
+          {idFound ? (
+            <ButtonItem layout="below" disabled={idBusy} onClick={() => saveId(folder)}>
+              Yes, save this ID
+            </ButtonItem>
+          ) : (
+            <ButtonItem layout="below" disabled={idBusy || idText.trim() === ""} onClick={checkId}>
+              {idBusy ? "Checking..." : "Check ID"}
+            </ButtonItem>
+          )}
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem layout="below" disabled={idBusy} onClick={closeEditor}>
+            Cancel
+          </ButtonItem>
+        </PanelSectionRow>
+      </>
+    );
 
   if (installs.length === 0) return null;
 
@@ -578,20 +596,24 @@ function YourAddons({
                   </PanelSectionRow>
                   {row.manual_folder &&
                     (editing === row.manual_folder ? (
-                      renderEditor(row.manual_folder, true)
+                      renderEditor(row.manual_folder, editMode)
                     ) : (
                       <PanelSectionRow>
-                        <ButtonItem
-                          layout="below"
+                        <DropdownItem
+                          label="Project ID"
+                          strDefaultLabel={String(row.project_id)}
+                          rgOptions={[
+                            { data: "change", label: "Change" },
+                            { data: "remove", label: "Remove" },
+                          ]}
+                          selectedOption={null}
                           disabled={busyId !== null || editing !== null}
-                          description={`Project ID ${row.project_id} (typed in)`}
-                          onClick={() => {
+                          onChange={(option) => {
                             closeEditor();
+                            setEditMode(option.data === "remove" ? "remove" : "change");
                             setEditing(row.manual_folder);
                           }}
-                        >
-                          {`Change or remove the project ID for ${row.name}`}
-                        </ButtonItem>
+                        />
                       </PanelSectionRow>
                     ))}
                 </div>
@@ -601,7 +623,7 @@ function YourAddons({
             list.untracked.map((name) => (
               <div key={`untracked-${name}`}>
                 {editing === name ? (
-                  renderEditor(name, false)
+                  renderEditor(name, "change")
                 ) : (
                   <>
                     <PanelSectionRow>
