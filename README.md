@@ -60,7 +60,7 @@ pnpm install && pnpm run build             # frontend
 
 - `_retail_` and `_classic_` are confirmed by Steam Deck guides. The other flavor folder names (`_classic_era_`, `_ptr_`, ...) are from memory.
 - The plugin now uses the `root` flag so it can overwrite its own files when you press **Install update**. Scanning works either way.
-- After **Install update**, Decky has to reload the plugin: open Decky's plugin list (gear icon) and choose Reload. I haven't confirmed there is a way to trigger that automatically.
+- After **Install update** the plugin asks systemd (`systemd-run`) to restart `plugin_loader` two seconds later so the update loads by itself. Untested on a real Deck; if it fails the panel tells you to reload the plugin from Decky's plugin list.
 
 ## License
 

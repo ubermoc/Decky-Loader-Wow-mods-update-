@@ -11,6 +11,7 @@ if _PY_MODULES not in sys.path:
     sys.path.insert(0, _PY_MODULES)
 
 import asyncio  # noqa: E402
+import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 
 from wow_addon_tools import updater  # noqa: E402
@@ -87,6 +88,25 @@ class Plugin:
             return {"ok": False, "error": f"Unexpected error: {exc}", "installed": None}
         decky.logger.info(f"installed update {installed}")
         return {"ok": True, "error": None, "installed": installed}
+
+    async def restart_loader(self) -> dict:
+        """Restart Decky's plugin loader so a freshly installed update takes effect.
+
+        The restart kills this backend, so it is scheduled as a transient systemd
+        timer (outside this service's cgroup) a couple of seconds from now, which
+        lets this call return first.
+        """
+        try:
+            subprocess.Popen(
+                ["systemd-run", "--on-active=2", "--collect", "systemctl", "restart", "plugin_loader"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as exc:
+            decky.logger.exception("could not schedule loader restart")
+            return {"ok": False, "error": str(exc)}
+        decky.logger.info("scheduled plugin_loader restart")
+        return {"ok": True, "error": None}
 
     async def _main(self):
         decky.logger.info("WoW Addon Updater loaded")
