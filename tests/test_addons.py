@@ -79,6 +79,12 @@ class FlavorTests(unittest.TestCase):
             self.assertEqual(addons.target_for("_classic_era_", root), addons.FlavorTarget(version_prefix="1.15"))
             self.assertIsNone(addons.target_for("_something_new_", root))
 
+    def test_forever_folder_uses_its_own_type_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(addons.target_for("_forever_", Path(tmp)), addons.FlavorTarget(type_id=88568))
+            f = {"gameVersions": ["1.60.1"], "gameVersionTypeIds": [88568]}
+            self.assertTrue(addons.target_for("_forever_", Path(tmp)).matches(f))
+
     def test_wrath_and_forever_clients_are_supported(self):
         for version, prefix in (("3.4.3.54261", "3.4"), ("4.4.1.1", "4.4"), ("1.60.1.99", "1.60")):
             info = f"Version!STRING:0|Product!STRING:0\n{version}|wow_classic\n"

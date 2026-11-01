@@ -44,10 +44,12 @@ STATUS_APPROVED = 4
 # CurseForge "game version type" ids for World of Warcraft (from wowforge-cli).
 TYPE_RETAIL = 517
 TYPE_CLASSIC_ERA = 67408
+TYPE_FOREVER = 88568  # "WoW: Forever" (client 1.60.x, product wowf, folder _forever_)
 
 # Folders that are always Retail / Classic Era. Retail is matched by type id (CurseForge tags
 # retail files broadly). Everything else is matched by the client version, see FlavorTarget.
 _FIXED_FLAVORS = {
+    "_forever_": TYPE_FOREVER,
     "_retail_": TYPE_RETAIL,
     "_ptr_": TYPE_RETAIL,
     "_xptr_": TYPE_RETAIL,

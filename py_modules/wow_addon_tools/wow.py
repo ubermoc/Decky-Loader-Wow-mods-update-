@@ -21,6 +21,7 @@ FLAVOR_LABELS = {
     "_classic_ptr_": "Classic PTR",
     "_classic_beta_": "Classic Beta",
     "_classic_era_ptr_": "Classic Era PTR",
+    "_forever_": "WoW Forever",
 }
 
 _FLAVOR_DIR = re.compile(r"^_[a-z0-9_]+_$")

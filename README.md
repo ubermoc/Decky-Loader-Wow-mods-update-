@@ -61,10 +61,14 @@ pnpm install && pnpm run build             # frontend
 
 - `_retail_` and `_classic_` are confirmed by Steam Deck guides. The other flavor folder names (`_classic_era_`, `_ptr_`, ...) are from memory.
 - The CurseForge website API (`/api/v1/mods/<id>/files`, no key) is undocumented. It worked when tested; it may break or be rate limited.
-- Classic folders are matched on the client version from `.build.info` in the WoW folder (e.g. `5.5` against each file's `gameVersions`), because CurseForge's type ids are shared between several Classic versions. This covers Wrath, Cata, MoP and "forever" clients. Retail uses CurseForge's Retail type id.
+- Classic folders are matched on the client version from `.build.info` in the WoW folder (e.g. `5.5` against each file's `gameVersions`), because CurseForge's type ids are shared between several Classic versions. This covers Wrath, Cata and MoP clients. WoW Forever (`_forever_` folder, product `wowf`, client 1.60.x) is matched by its own CurseForge type id 88568. Retail uses CurseForge's Retail type id.
 - Without a record of what it installed, an addon counts as current only if its `## Version:` appears in the newest release's name; otherwise it is downloaded once and recorded.
 - The plugin now uses the `root` flag so it can overwrite its own files when you press **Install update**. Scanning works either way.
 - After **Install update** the plugin runs `systemctl restart plugin_loader` three seconds later so the update loads by itself (same approach as Ubermoc Speech). If that ever fails, reload the plugin from Decky's plugin list.
+
+## Troubleshooting
+
+Each run logs a line per WoW version (tracked, updated, current, failed counts and the first errors) to Decky's plugin log: `~/homebrew/logs/WoW Addon Updater/` on the Deck (newest file = current session), or `sudo journalctl -u plugin_loader.service -b`.
 
 ## License
 
