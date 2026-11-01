@@ -19,12 +19,24 @@ Everything is read-only: the plugin never writes to `shortcuts.vdf`, your WoW fo
 | "Updated just now" detection after CurseForge closes | not started |
 | Per-version update (driving the CurseForge UI) | not started: unverified that this is possible |
 
-## Install (manual)
+## Install on your Deck (no building needed)
+
+GitHub builds the plugin on every push and publishes it as the
+[latest release](https://github.com/ubermoc/Decky-Loader-Wow-mods-update-/releases/tag/latest).
+In a terminal (works in fish or bash), run these one at a time:
 
 ```
-./scripts/package.sh            # needs pnpm 9+ and zip
-unzip "out/WoW Addon Updater.zip" -d ~/homebrew/plugins/
+cd ~/Downloads
+curl -L -o wow-addon-updater.zip https://github.com/ubermoc/Decky-Loader-Wow-mods-update-/releases/download/latest/WoW.Addon.Updater.zip
+sudo rm -rf "$HOME/homebrew/plugins/WoW Addon Updater"
+sudo unzip -o wow-addon-updater.zip -d "$HOME/homebrew/plugins/"
 sudo systemctl restart plugin_loader
+```
+
+## Building it yourself (needs pnpm 9+ and zip)
+
+```
+./scripts/package.sh            # run from the repository folder
 ```
 
 ## How it finds things
