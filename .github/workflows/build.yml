@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main, ccr-3267654b-kzmm1f]
+    branches: [main, ccr-3267654b-kzmm1f, claude/dreamy-fermat-chozm7]
   workflow_dispatch:
 
 permissions:
