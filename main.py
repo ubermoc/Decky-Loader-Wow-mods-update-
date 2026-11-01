@@ -11,10 +11,13 @@ if _PY_MODULES not in sys.path:
     sys.path.insert(0, _PY_MODULES)
 
 import asyncio  # noqa: E402
+import json  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
 
-from wow_addon_tools import updater  # noqa: E402
+from wow_addon_tools import addons, updater  # noqa: E402
 from wow_addon_tools.shortcuts import find_all_shortcuts, find_curseforge  # noqa: E402
 from wow_addon_tools.wow import find_installs  # noqa: E402
 
@@ -24,6 +27,72 @@ _PLUGIN_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 def _home() -> Path:
     # DECKY_USER_HOME is the real user's home even if the backend runs elevated.
     return Path(getattr(decky, "DECKY_USER_HOME", None) or os.path.expanduser("~"))
+
+
+def _settings_dir() -> Path:
+    path = Path(getattr(decky, "DECKY_PLUGIN_SETTINGS_DIR", None) or (_PLUGIN_DIR / "settings"))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _load_json(name: str, default):
+    try:
+        data = json.loads((_settings_dir() / name).read_text())
+        return data if isinstance(data, type(default)) else default
+    except (OSError, ValueError):
+        return default
+
+
+def _save_json(name: str, data) -> None:
+    path = _settings_dir() / name
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data))
+    os.replace(tmp, path)
+
+
+AUTO_FIRST_DELAY = 120  # seconds after the plugin loads
+AUTO_INTERVAL = 6 * 60 * 60
+AUTO_RETRY_WHEN_WOW_RUNNING = 30 * 60
+
+_run_lock = threading.Lock()
+_last_run: dict = {}
+
+
+def _run_addon_updates(only_path: str = "") -> dict:
+    """Blocking: update every tracked CurseForge addon (or one AddOns folder)."""
+    if not _run_lock.acquire(blocking=False):
+        return {"ok": False, "error": "An addon update is already running.", "results": []}
+    try:
+        if addons.wow_running():
+            return {"ok": False, "error": "WoW is running. Close it first so addons aren't swapped under it.", "results": []}
+        state = _load_json("state.json", {})
+        client = addons.CurseForgeClient()
+        results = []
+        for install in find_installs(_home()):
+            if only_path and install.addons_path != only_path:
+                continue
+            addons_dir = Path(install.addons_path)
+            if not addons_dir.is_dir():
+                continue
+            per_install = state.setdefault(install.addons_path, {})
+            result = addons.update_install(install.flavor, Path(install.root), addons_dir, client, per_install)
+            result["label"] = install.label
+            result["addons_path"] = install.addons_path
+            results.append(result)
+            _save_json("state.json", state)
+        run = {"ok": True, "error": None, "results": results, "finished": time.time()}
+        _last_run.clear()
+        _last_run.update(run)
+        decky.logger.info(
+            "addon update: "
+            + ", ".join(f"{r['label']}: {len(r['updated'])} updated, {len(r['failed'])} failed" for r in results)
+        )
+        return run
+    except Exception as exc:
+        decky.logger.exception("addon update crashed")
+        return {"ok": False, "error": f"Unexpected error: {exc}", "results": []}
+    finally:
+        _run_lock.release()
 
 
 class Plugin:
@@ -97,8 +166,43 @@ class Plugin:
         )
         return {"ok": True, "error": None, "installed": installed}
 
+    async def update_addons(self, addons_path: str = "") -> dict:
+        """Update CurseForge addons now: all WoW versions, or just one AddOns folder."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _run_addon_updates, addons_path)
+
+    async def get_addon_settings(self) -> dict:
+        settings = _load_json("settings.json", {})
+        return {"auto_update": bool(settings.get("auto_update", True)), "last_run": dict(_last_run) or None}
+
+    async def set_auto_update(self, enabled: bool) -> dict:
+        settings = _load_json("settings.json", {})
+        settings["auto_update"] = bool(enabled)
+        _save_json("settings.json", settings)
+        return {"auto_update": bool(enabled)}
+
+    async def _auto_loop(self):
+        await asyncio.sleep(AUTO_FIRST_DELAY)
+        while True:
+            delay = AUTO_INTERVAL
+            try:
+                if _load_json("settings.json", {}).get("auto_update", True):
+                    loop = asyncio.get_running_loop()
+                    run = await loop.run_in_executor(None, _run_addon_updates, "")
+                    if not run["ok"] and "WoW is running" in (run["error"] or ""):
+                        delay = AUTO_RETRY_WHEN_WOW_RUNNING
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                decky.logger.exception("auto update loop failed")
+            await asyncio.sleep(delay)
+
     async def _main(self):
+        self._auto_task = asyncio.create_task(self._auto_loop())
         decky.logger.info("WoW Addon Updater loaded")
 
     async def _unload(self):
+        task = getattr(self, "_auto_task", None)
+        if task:
+            task.cancel()
         decky.logger.info("WoW Addon Updater unloaded")

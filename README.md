@@ -2,12 +2,13 @@
 
 A Gaming Mode helper for World of Warcraft addons on Steam Deck / SteamOS.
 
-It does **not** download or update addons itself. CurseForge's own Linux app does that. This plugin:
+This plugin:
 
-1. Checks whether the CurseForge app has been added to Steam as a non-Steam game. If not, it shows how to add it.
-2. Once it has, lists every WoW version found on the system (Retail, Classic, Classic Era, PTR, ...) with the addon count and when each `AddOns` folder last changed.
+1. Lists every WoW version found on the system (Retail, Classic, Classic Era, PTR, ...) with the addon count and when each `AddOns` folder last changed.
+2. **Updates your addons from CurseForge by itself**, the way [wowforge-cli](https://github.com/m-triassi/wowforge-cli) does: it reads the `X-Curse-Project-ID` line in each addon's `.toc`, asks CurseForge's website API for the newest release for that WoW version, and swaps the addon folder in. Automatically shortly after Decky starts and every 6 hours (toggle in the panel), or on demand with **Update all addons now** / **Update <version> only**. It waits while WoW is running.
+3. Can launch the CurseForge app (if you added it to Steam as a non-Steam game) and flags which versions changed during a session.
 
-Everything is read-only: the plugin never writes to `shortcuts.vdf`, your WoW folders, or anything else.
+The plugin never writes to `shortcuts.vdf`. It **does** write to your `AddOns` folders when updating: each addon folder is replaced as a whole (files you added inside an addon's own folder are lost; `WTF`, saved variables and addons without a CurseForge id are never touched) and rolled back if the swap fails. Only addons that carry `X-Curse-Project-ID` are managed; hand-installed ones are ignored.
 
 ## Status
 
@@ -18,7 +19,7 @@ Everything is read-only: the plugin never writes to `shortcuts.vdf`, your WoW fo
 | Updates section (installed vs latest, Install update button) | done; the first install of it must be done with the curl commands below |
 | Launch CurseForge from the plugin | done (untested on a real Deck; uses the undocumented `SteamClient.Apps.RunGame`) |
 | "Updated just now" detection after CurseForge closes | done (untested on a real Deck; rescans on the undocumented `RegisterForAppLifetimeNotifications`, and when you reopen the panel) |
-| Per-version update (driving the CurseForge UI) | not started: unverified that this is possible |
+| Per-version update | done as direct CurseForge updates (not by driving the CurseForge app, which can't be done): untested on a real Deck; uses undocumented website endpoints that can change |
 
 ## Install on your Deck (no building needed)
 
@@ -59,6 +60,9 @@ pnpm install && pnpm run build             # frontend
 ## Unverified assumptions
 
 - `_retail_` and `_classic_` are confirmed by Steam Deck guides. The other flavor folder names (`_classic_era_`, `_ptr_`, ...) are from memory.
+- The CurseForge website API (`/api/v1/mods/<id>/files`, no key) is undocumented. It worked when tested; it may break or be rate limited.
+- `_classic_` is mapped to an expansion by reading `.build.info` in the WoW folder. Wrath of the Lich King has no known CurseForge type id, so it is skipped with a message.
+- Without a record of what it installed, the plugin assumes an addon is current if its newest CurseForge release is older than the folder's last change.
 - The plugin now uses the `root` flag so it can overwrite its own files when you press **Install update**. Scanning works either way.
 - After **Install update** the plugin runs `systemctl restart plugin_loader` three seconds later so the update loads by itself (same approach as Ubermoc Speech). If that ever fails, reload the plugin from Decky's plugin list.
 

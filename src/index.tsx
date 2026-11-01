@@ -1,5 +1,5 @@
 import { callable, definePlugin } from "@decky/api";
-import { ButtonItem, Field, PanelSection, PanelSectionRow } from "@decky/ui";
+import { ButtonItem, Field, PanelSection, PanelSectionRow, ToggleField } from "@decky/ui";
 import { useCallback, useEffect, useState } from "react";
 import { FaCloudDownloadAlt } from "react-icons/fa";
 
@@ -32,7 +32,29 @@ interface InstallResult {
   installed: { version: string | null; build: string | null } | null;
 }
 
+interface AddonRunResult {
+  ok: boolean;
+  error: string | null;
+  finished?: number;
+  results: {
+    label: string;
+    addons_path: string;
+    tracked: number;
+    updated: string[];
+    failed: { addon: string; error: string }[];
+    error: string | null;
+  }[];
+}
+
+interface AddonSettings {
+  auto_update: boolean;
+  last_run: AddonRunResult | null;
+}
+
 const scan = callable<[], ScanResult>("scan");
+const updateAddons = callable<[string], AddonRunResult>("update_addons");
+const getAddonSettings = callable<[], AddonSettings>("get_addon_settings");
+const setAutoUpdate = callable<[boolean], { auto_update: boolean }>("set_auto_update");
 const getUpdateInfo = callable<[], UpdateInfo>("get_update_info");
 const installUpdate = callable<[], InstallResult>("install_update");
 
@@ -129,6 +151,97 @@ function InstallList({ installs, updated }: { installs: WowInstall[]; updated: S
           />
         </PanelSectionRow>
       ))}
+    </PanelSection>
+  );
+}
+
+function summarizeRun(run: AddonRunResult): string {
+  if (!run.ok) return run.error ?? "Addon update failed.";
+  if (run.results.length === 0) return "No WoW versions to update.";
+  return run.results
+    .map((r) => {
+      if (r.error) return `${r.label}: ${r.error}`;
+      const parts: string[] = [];
+      if (r.updated.length) parts.push(`${r.updated.length} updated (${r.updated.slice(0, 4).join(", ")}${r.updated.length > 4 ? ", ..." : ""})`);
+      if (r.failed.length) parts.push(`${r.failed.length} failed (${r.failed[0].addon}: ${r.failed[0].error})`);
+      if (!parts.length) parts.push(`up to date (${r.tracked} tracked)`);
+      return `${r.label}: ${parts.join("; ")}`;
+    })
+    .join("\n");
+}
+
+function AddonUpdates({ installs, onDone }: { installs: WowInstall[]; onDone: () => void }) {
+  const [settings, setSettings] = useState<AddonSettings | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const s = await getAddonSettings();
+        setSettings(s);
+        if (s.last_run?.finished) {
+          setMessage(`Last automatic run ${relativeAge(s.last_run.finished)}:\n${summarizeRun(s.last_run)}`);
+        }
+      } catch (err) {
+        setMessage(`Could not load addon settings: ${String(err)}`);
+      }
+    })();
+  }, []);
+
+  const run = useCallback(
+    async (path: string) => {
+      setBusy(true);
+      setMessage("Updating addons... this can take a few minutes.");
+      try {
+        const result = await updateAddons(path);
+        setMessage(summarizeRun(result));
+        onDone();
+      } catch (err) {
+        setMessage(`Addon update failed: ${String(err)}`);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onDone],
+  );
+
+  return (
+    <PanelSection title="Addon updates">
+      <PanelSectionRow>
+        <ToggleField
+          label="Update automatically"
+          description="Shortly after Decky starts, then every 6 hours. Waits while WoW is running."
+          checked={settings?.auto_update ?? true}
+          disabled={settings === null}
+          onChange={async (checked: boolean) => {
+            setSettings((s) => (s ? { ...s, auto_update: checked } : s));
+            try {
+              await setAutoUpdate(checked);
+            } catch (err) {
+              setMessage(`Could not save the setting: ${String(err)}`);
+            }
+          }}
+        />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ButtonItem layout="below" disabled={busy || installs.length === 0} onClick={() => run("")}>
+          {busy ? "Working..." : "Update all addons now"}
+        </ButtonItem>
+      </PanelSectionRow>
+      {installs.length > 1 &&
+        installs.map((install) => (
+          <PanelSectionRow key={install.addons_path}>
+            <ButtonItem layout="below" disabled={busy} onClick={() => run(install.addons_path)}>
+              Update {install.label} only
+            </ButtonItem>
+          </PanelSectionRow>
+        ))}
+      {message && (
+        <PanelSectionRow>
+          <Field focusable label={<div style={{ whiteSpace: "pre-wrap" }}>{message}</div>} bottomSeparator="none" />
+        </PanelSectionRow>
+      )}
     </PanelSection>
   );
 }
@@ -301,6 +414,7 @@ function MainContent() {
   return (
     <>
       <InstallList installs={result.installs} updated={updated} />
+      <AddonUpdates installs={result.installs} onDone={refresh} />
       <PanelSection>
         <PanelSectionRow>
           <ButtonItem

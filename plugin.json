@@ -5,7 +5,7 @@
   "api_version": 1,
   "publish": {
     "tags": ["utility", "wow", "addons"],
-    "description": "Finds your World of Warcraft versions and helps you update their addons through CurseForge in Gaming Mode.",
+    "description": "Finds your World of Warcraft versions and updates their CurseForge addons automatically in Gaming Mode.",
     "image": ""
   }
 }
