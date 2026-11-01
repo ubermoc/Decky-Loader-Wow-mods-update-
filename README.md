@@ -66,6 +66,15 @@ pnpm install && pnpm run build             # frontend
 - The plugin now uses the `root` flag so it can overwrite its own files when you press **Install update**. Scanning works either way.
 - After **Install update** the plugin runs `systemctl restart plugin_loader` three seconds later so the update loads by itself (same approach as Ubermoc Speech). If that ever fails, reload the plugin from Decky's plugin list.
 
+## Updating through the CurseForge app (experimental)
+
+The **Update through the CurseForge app** button launches CurseForge, presses its own **Update all** button, waits for it to finish and closes it. It works by talking to the app over Chromium's remote debugging port (CurseForge is an Electron app), so it needs:
+
+1. `--remote-debugging-port=9222` added to the CurseForge shortcut's launch options in Steam (keep any existing options such as `--no-sandbox`). This opens a local-only port while CurseForge runs.
+2. WoW > My Addons open in CurseForge (it should reopen on the last screen).
+
+Based on reading CurseForge 1.325.0's files: it is Electron 42, nothing disables the debugging switch, and the My Addons screen has a button with class `update-all` labelled "Update all (N)". **Not yet run against the real app**, so treat it as untested; Overwolf can change the interface at any time. The direct updater above does not need any of this.
+
 ## Troubleshooting
 
 Each run logs a line per WoW version (tracked, updated, current, failed counts and the first errors) to Decky's plugin log: `~/homebrew/logs/WoW Addon Updater/` on the Deck (newest file = current session), or `sudo journalctl -u plugin_loader.service -b`.

@@ -62,6 +62,9 @@ const PROVENANCE = "wow-addon-updater/2f44d0b2-b3c2-4726-a93d-480b19a8008e";
 const scan = callable<[], ScanResult>("scan");
 const updateAddons = callable<[string], AddonRunResult>("update_addons");
 const getAddonSettings = callable<[], AddonSettings>("get_addon_settings");
+const updateViaApp = callable<[], { ok: boolean; error: string | null; clicked?: boolean; message?: string }>(
+  "update_via_curseforge_app",
+);
 const setAutoUpdate = callable<[boolean], { auto_update: boolean }>("set_auto_update");
 const getUpdateInfo = callable<[], UpdateInfo>("get_update_info");
 const installUpdate = callable<[], InstallResult>("install_update");
@@ -181,7 +184,15 @@ function summarizeRun(run: AddonRunResult): string {
     .join("\n");
 }
 
-function AddonUpdates({ installs, onDone }: { installs: WowInstall[]; onDone: () => void }) {
+function AddonUpdates({
+  installs,
+  curseforgeAppId,
+  onDone,
+}: {
+  installs: WowInstall[];
+  curseforgeAppId: number;
+  onDone: () => void;
+}) {
   const [settings, setSettings] = useState<AddonSettings | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -238,6 +249,30 @@ function AddonUpdates({ installs, onDone }: { installs: WowInstall[]; onDone: ()
       <PanelSectionRow>
         <ButtonItem layout="below" disabled={busy || installs.length === 0} onClick={() => run("")}>
           {busy ? "Working..." : "Update all addons now"}
+        </ButtonItem>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          disabled={busy}
+          description="Opens CurseForge, presses its Update all button, then closes it. Needs --remote-debugging-port=9222 added to the CurseForge shortcut's launch options in Steam, and WoW > My Addons open in CurseForge."
+          onClick={async () => {
+            setBusy(true);
+            setMessage("Opening CurseForge...");
+            try {
+              launchShortcut(curseforgeAppId);
+              setMessage("Waiting for CurseForge to start and update. This can take a few minutes.");
+              const result = await updateViaApp();
+              setMessage(result.ok ? (result.message ?? "Done.") : (result.error ?? "Failed."));
+              onDone();
+            } catch (err) {
+              setMessage(`Could not drive CurseForge: ${String(err)}`);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Update through the CurseForge app
         </ButtonItem>
       </PanelSectionRow>
       {installs.length > 1 &&
@@ -425,7 +460,7 @@ function MainContent() {
   return (
     <>
       <InstallList installs={result.installs} updated={updated} />
-      <AddonUpdates installs={result.installs} onDone={refresh} />
+      <AddonUpdates installs={result.installs} curseforgeAppId={result.curseforge.app_id} onDone={refresh} />
       <PanelSection>
         <PanelSectionRow>
           <ButtonItem

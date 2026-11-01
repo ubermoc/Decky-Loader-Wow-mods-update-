@@ -19,7 +19,7 @@ import tempfile  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 
-from wow_addon_tools import PROVENANCE, addons, updater  # noqa: E402
+from wow_addon_tools import PROVENANCE, addons, cdp, updater  # noqa: E402
 from wow_addon_tools.shortcuts import find_all_shortcuts, find_curseforge  # noqa: E402
 from wow_addon_tools.wow import find_installs  # noqa: E402
 
@@ -103,6 +103,22 @@ def _run_addon_updates(only_path: str = "") -> dict:
         _run_lock.release()
 
 
+def _drive_curseforge_app() -> dict:
+    """Blocking: press "Update all" in the already-launched CurseForge app, then close it."""
+    if addons.wow_running():
+        return {"ok": False, "error": "WoW is running. Close it first so addons aren't swapped under it."}
+    try:
+        result = cdp.update_all_through_app()
+    except cdp.CdpError as exc:
+        decky.logger.warning(f"curseforge app: {exc}")
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        decky.logger.exception("curseforge app drive crashed")
+        return {"ok": False, "error": f"Unexpected error: {exc}"}
+    decky.logger.info(f"curseforge app: {result}")
+    return {"ok": True, "error": None, "clicked": result["clicked"], "message": result["message"]}
+
+
 class Plugin:
     async def scan(self) -> dict:
         """Read-only snapshot: is CurseForge in Steam, and which WoW versions exist."""
@@ -178,6 +194,11 @@ class Plugin:
         """Update CurseForge addons now: all WoW versions, or just one AddOns folder."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _run_addon_updates, addons_path)
+
+    async def update_via_curseforge_app(self) -> dict:
+        """Call after launching CurseForge (with --remote-debugging-port=9222 in its launch options)."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _drive_curseforge_app)
 
     async def get_addon_settings(self) -> dict:
         settings = _load_json("settings.json", {})
